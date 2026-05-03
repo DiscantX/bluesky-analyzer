@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bluesky Analyzer</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+<!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="topbar-logo">🦋 Bluesky Analyzer</div>
+
+  <div class="account-switcher" id="account-pills"></div>
+
+  <div class="topbar-sep"></div>
+
+  <span id="last-synced" style="font-family:var(--mono);font-size:0.68rem;color:var(--muted)"></span>
+
+  <button class="btn btn-ghost" onclick="openAddAccount()">+ Account</button>
+  <button class="btn btn-primary" id="sync-btn" onclick="startSync()">↺ Sync</button>
+</header>
+
+<!-- ── Sync progress bar ──────────────────────────────────────────────────── -->
+<div class="sync-bar" id="sync-bar">
+  <div class="sync-bar-text" id="sync-bar-text">Syncing…</div>
+  <div class="progress-track">
+    <div class="progress-fill" id="progress-fill"></div>
+  </div>
+</div>
+
+<!-- ── Stats strip ────────────────────────────────────────────────────────── -->
+<div class="stats-strip">
+  <div class="stat-box">
+    <div class="stat-val" id="stat-follows">—</div>
+    <div class="stat-label">Following</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-val" id="stat-followers">—</div>
+    <div class="stat-label">Followers</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-val" id="stat-inactive">—</div>
+    <div class="stat-label">Inactive</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-val" id="stat-repost">—</div>
+    <div class="stat-label">Repost Heavy</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-val" id="stat-onesided">—</div>
+    <div class="stat-label">One-Sided</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-val" id="stat-nointeract">—</div>
+    <div class="stat-label">No Interact</div>
+  </div>
+</div>
+
+<!-- ── Layout ─────────────────────────────────────────────────────────────── -->
+<div class="layout">
+
+  <!-- Sidebar nav -->
+  <nav class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Views</div>
+      <div id="nav-items"></div>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="main">
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <div class="search-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        <input
+          class="search-input"
+          id="search-input"
+          type="text"
+          placeholder="Search handles… (⌘K)"
+          oninput="onSearch(this.value)"
+        >
+      </div>
+
+      <select class="sort-select" id="sort-by" onchange="onSortBy(this.value)"></select>
+      <button class="btn btn-ghost" id="sort-dir-btn" onclick="onSortDir()" title="Toggle sort direction">↑</button>
+
+      <span class="result-count" id="result-count"></span>
+    </div>
+
+    <!-- User list -->
+    <div class="user-list" id="user-list">
+      <div class="state-box">Loading…</div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── Add Account Modal ───────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="modal" onclick="if(event.target===this)closeAddAccount()">
+  <div class="modal">
+    <div class="modal-title">Add Bluesky Account</div>
+
+    <div class="field">
+      <label>Alias (nickname)</label>
+      <input id="modal-alias" type="text" placeholder="main" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Handle</label>
+      <input id="modal-handle" type="text" placeholder="you.bsky.social" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>App Password</label>
+      <input id="modal-password" type="password" placeholder="xxxx-xxxx-xxxx-xxxx">
+    </div>
+    <p style="font-size:0.7rem;color:var(--muted);font-family:var(--mono);margin-top:0.25rem">
+      Generate at: Settings → Privacy &amp; Security → App Passwords<br>
+      Your password is stored in the system keychain only — never on disk.
+    </p>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeAddAccount()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitAddAccount()">Save Account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast container ────────────────────────────────────────────────────── -->
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

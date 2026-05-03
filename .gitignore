@@ -1,0 +1,21 @@
+# Credentials & sessions
+accounts.json
+.sessions/
+
+# Database
+data.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+
+# Aerich migrations (generate these yourself)
+migrations/
+
+# OS
+.DS_Store
+Thumbs.db
