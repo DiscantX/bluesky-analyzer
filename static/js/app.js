@@ -13,6 +13,7 @@ const state = {
   syncStream: null,
   crawlStream: null,
   statusTimer: null,
+  customFilters: [],
   lastUserFetch: 0,
   settings: {},
 
@@ -31,12 +32,35 @@ const state = {
     blocked: null,
     exclude_stubs: false,
     exclude_unanalyzed: false,
+    is_stub: null, // New
+    filter_tree: null,
     // numeric ranges
     min_days_inactive: null,
     min_repost_ratio: null,
     max_repost_ratio: null,
     min_followers: null,
     max_followers: null,
+    min_sampled_post_count: null, // New
+    max_sampled_post_count: null, // New
+    min_repost_count: null, // New
+    max_repost_count: null, // New
+    min_original_post_count: null, // New
+    max_original_post_count: null, // New
+    min_crawl_priority: null, // New
+    max_crawl_priority: null, // New
+    min_clustering_coefficient: null, // New
+    max_clustering_coefficient: null, // New
+    // date ranges
+    before_last_post_at: null, // New
+    after_last_post_at: null, // New
+    before_last_analyzed_at: null, // New
+    after_last_analyzed_at: null, // New
+    before_last_hydrated_at: null, // New
+    after_last_hydrated_at: null, // New
+    before_last_crawled_at: null, // New
+    after_last_crawled_at: null, // New
+    before_first_seen_at: null, // New
+    after_first_seen_at: null, // New
   },
   sort: { by: "handle", dir: "asc" },
   pagination: { limit: 50, offset: 0 },
@@ -48,7 +72,7 @@ const TABS = [
   { id: "all",        label: "All Profiles",     icon: "🌐", statKey: "graph_size",     filters: {} },
   { id: "follows",    label: "Follows",          icon: "👤", statKey: "total_follows",  filters: { i_follow_them: true } },
   { id: "followers",  label: "Followers",        icon: "👥", statKey: "total_followers",filters: { they_follow_me: true } },
-  { id: "stubs",      label: "Discovered",       icon: "🔍", statKey: "pending",        filters: { crawl_tier: 0 } },
+  { id: "stubs",      label: "Stubs",            icon: "🔍", statKey: "stubs_count",    filters: { is_stub: true } },
   { id: "inactive",   label: "Inactive",          icon: "⏸", statKey: "inactive",       filters: { i_follow_them: true, is_inactive: true } },
   { id: "repost",     label: "Repost Heavy",      icon: "🔁", statKey: "repost_heavy",   filters: { i_follow_them: true, is_repost_heavy: true } },
   { id: "onesided",   label: "One-Sided",         icon: "↗",  statKey: "one_sided",      filters: { is_one_sided_follow: true } },
@@ -60,12 +84,57 @@ const SORT_OPTIONS = [
   { value: "handle",          label: "Handle" },
   { value: "display_name",    label: "Name" },
   { value: "followers_count", label: "Followers" },
+  { value: "follows_count",   label: "Following" },
+  { value: "posts_count",     label: "Post Count" },
+  { value: "sampled_post_count", label: "Sampled Posts" },
+  { value: "repost_count",    label: "Reposts" },
+  { value: "original_post_count", label: "Original Posts" },
   { value: "days_since_post", label: "Days Inactive" },
   { value: "repost_ratio",    label: "Repost %" },
-  { value: "posts_count",     label: "Post Count" },
+  { value: "flowrank_score",  label: "FlowRank" },
+  { value: "clustering_coefficient", label: "Clustering Coeff." },
+  { value: "in_subgraph_degree", label: "In-Subgraph Degree" },
+  { value: "crawl_priority",  label: "Crawl Priority" },
   { value: "last_post_at",    label: "Last Post" },
   { value: "last_analyzed_at",label: "Last Analyzed" },
+  { value: "last_hydrated_at",label: "Last Hydrated" },
+  { value: "last_crawled_at", label: "Last Crawled" },
+  { value: "first_seen_at",   label: "First Seen" },
 ];
+
+const FILTER_FIELDS = {
+  "i_follow_them": { label: "I Follow Them", type: "boolean" },
+  "they_follow_me": { label: "They Follow Me", type: "boolean" },
+  "is_inactive": { label: "Inactive", type: "boolean" },
+  "is_repost_heavy": { label: "Repost Heavy", type: "boolean" },
+  "followers_count": { label: "Followers", type: "number" },
+  "days_since_post": { label: "Days Inactive", type: "number" },
+  "repost_ratio": { label: "Repost Ratio", type: "number" },
+  "flowrank_score": { label: "FlowRank", type: "number" },
+  "community_id": { label: "Community ID", type: "number" },
+  "handle": { label: "Handle", type: "string" },
+  "display_name": { label: "Name", type: "string" },
+};
+
+const OPERATORS_BY_TYPE = {
+  "boolean": [{ val: "eq", label: "is" }],
+  "number": [
+    { val: "eq", label: "=" }, { val: "neq", label: "≠" },
+    { val: "gt", label: ">" }, { val: "gte", label: "≥" },
+    { val: "lt", label: "<" }, { val: "lte", label: "≤" }
+  ],
+  "string": [
+    { val: "eq", label: "is" }, { val: "contains", label: "contains" },
+    { val: "starts_with", label: "starts with" }
+  ]
+};
+
+let builderState = {
+  name: "",
+  icon: "🔍",
+  color: "#3b82f6",
+  tree: { id: "root", op: "AND", conditions: [] }
+};
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
@@ -143,6 +212,9 @@ function userRow(u) {
         <div class="col-stat">${u.days_since_post != null ? u.days_since_post + "d" : "—"}</div>
         <div class="col-stat">${pct(u.repost_ratio)}</div>
         <div class="col-stat">${fmt(u.posts_count)}</div>
+        <div class="col-stat">${fmt(u.sampled_post_count)}</div>
+        <div class="col-stat">${fmt(u.repost_count)}</div>
+        <div class="col-stat">${fmt(u.original_post_count)}</div>
         <div class="col-stat" title="FlowRank Influence">💎 ${u.flowrank_score > 0 ? (u.flowrank_score * 1000).toFixed(2) : "—"}</div>
         <div class="col-stat" title="Community ID">🌐 ${u.community_id != null ? u.community_id : "—"}</div>
         <div class="col-date">${shortDate(u.last_post_at)}</div>
@@ -150,6 +222,12 @@ function userRow(u) {
       </div>
       <div class="badges-row">${badges(u)}</div>
     </a>`;
+}
+
+function shortDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
 }
 
 // ── Stats strip ───────────────────────────────────────────────────────────────
@@ -162,6 +240,7 @@ function renderStats() {
   el("stat-onesided").textContent  = fmt(s.one_sided);
   el("stat-nointeract").textContent= fmt(s.no_interaction);
   el("stat-discovered").textContent= fmt(s.graph_size);
+  el("stat-stubs").textContent     = fmt(s.stubs_count); // New stat
   el("stat-analysed").textContent  = fmt(s.analysed);
   el("stat-pending").textContent   = fmt(s.pending);
 
@@ -192,6 +271,19 @@ function renderNav() {
   }).join("");
 }
 
+function renderCustomFilters() {
+  const wrap = el("custom-filters");
+  if (!wrap) return;
+  wrap.innerHTML = state.customFilters.map(f => `
+    <div class="nav-item ${state.activeTab === 'custom-' + f.id ? 'active' : ''}" 
+         onclick="selectCustomFilter(${f.id})">
+      <span style="color:${f.color}">${f.icon || '🔍'}</span>
+      <span>${f.name}</span>
+      <button class="btn-mini btn-ghost" onclick="deleteFilterSet(event, ${f.id})" style="margin-left:auto; border:none; opacity:0.4">×</button>
+    </div>
+  `).join("");
+}
+
 function renderHeader(label, field, isStat = false) {
   const active = state.sort.by === field;
   const dir = state.sort.dir === "asc" ? "↑" : "↓";
@@ -208,7 +300,7 @@ function sortByHeader(field) {
   } else {
     state.sort.by = field;
     // Default to DESC for numbers/dates, ASC for names
-    const descDefaults = ["followers_count", "follows_count", "days_since_post", "repost_ratio", "posts_count", "last_post_at", "last_analyzed_at", "flowrank_score", "community_id"];
+    const descDefaults = ["followers_count", "follows_count", "posts_count", "sampled_post_count", "repost_count", "original_post_count", "days_since_post", "repost_ratio", "flowrank_score", "clustering_coefficient", "in_subgraph_degree", "crawl_priority", "last_post_at", "last_analyzed_at", "last_hydrated_at", "last_crawled_at", "first_seen_at", "community_id"];
     state.sort.dir = descDefaults.includes(field) ? "desc" : "asc";
   }
   state.pagination.offset = 0;
@@ -267,6 +359,9 @@ function renderUsers() {
       ${renderHeader("Inactive", "days_since_post", true)}
       ${renderHeader("Repost %", "repost_ratio", true)}
       ${renderHeader("Posts", "posts_count", true)}
+      ${renderHeader("Sampled", "sampled_post_count", true)}
+      ${renderHeader("Reposts", "repost_count", true)}
+      ${renderHeader("Originals", "original_post_count", true)}
       ${renderHeader("Rank", "flowrank_score", true)}
       ${renderHeader("Grp", "community_id", true)}
       ${renderHeader("Last Post", "last_post_at", true)}
@@ -338,6 +433,7 @@ async function fetchUsers(append = false, silent = false) {
     "is_one_sided_follow","is_follower_only","interacted_with_owner","muted","blocked", 
     "exclude_stubs", "exclude_unanalyzed"
   ];
+  const boolFlagsWithIsStub = [...boolFlags, "is_stub"]; // New
   for (const key of boolFlags) {
     if (state.filters[key] !== null && state.filters[key] !== undefined) {
       params.set(key, state.filters[key]);
@@ -348,6 +444,18 @@ async function fetchUsers(append = false, silent = false) {
   const numericFilters = [
     "min_days_inactive","min_repost_ratio","max_repost_ratio",
     "min_followers","max_followers",
+    "min_sampled_post_count","max_sampled_post_count", // New
+    "min_repost_count","max_repost_count", // New
+    "min_original_post_count","max_original_post_count", // New
+    "min_crawl_priority","max_crawl_priority", // New
+    "min_clustering_coefficient","max_clustering_coefficient", // New
+  ];
+  const dateFilters = [
+    "before_last_post_at","after_last_post_at",
+    "before_last_analyzed_at","after_last_analyzed_at",
+    "before_last_hydrated_at","after_last_hydrated_at", // New
+    "before_last_crawled_at","after_last_crawled_at", // New
+    "before_first_seen_at","after_first_seen_at", // New
   ];
   for (const key of numericFilters) {
     if (state.filters[key] != null) params.set(key, state.filters[key]);
@@ -373,6 +481,7 @@ async function fetchUsers(append = false, silent = false) {
 
 async function refresh() {
   await fetchStats();
+  await loadFilterSets();
   await fetchUsers(false, true);
 }
 
@@ -432,11 +541,21 @@ function selectTab(tabId) {
   const boolFlags = [
     "i_follow_them","they_follow_me","is_inactive","is_repost_heavy",
     "is_one_sided_follow","is_follower_only","interacted_with_owner","muted","blocked",
+    "is_stub", // New
   ];
   for (const key of boolFlags) state.filters[key] = null;
   Object.assign(state.filters, tab.filters);
 
   renderNav();
+  fetchUsers();
+}
+
+function selectCustomFilter(id) {
+  const f = state.customFilters.find(x => x.id === id);
+  if (!f) return;
+  state.activeTab = 'custom-' + id;
+  for (let k in state.filters) state.filters[k] = null;
+  state.filters.filter_tree = typeof f.condition_tree === 'string' ? JSON.parse(f.condition_tree) : f.condition_tree;
   fetchUsers();
 }
 
@@ -464,6 +583,7 @@ async function switchAccount(alias) {
   state.filters.i_follow_them = true;
   state.filters.exclude_stubs = false;
   state.filters.exclude_unanalyzed = false;
+  state.filters.is_stub = null; // New
   if (el("exclude-stubs-toggle")) el("exclude-stubs-toggle").checked = false;
   if (el("exclude-unanalyzed-toggle")) el("exclude-unanalyzed-toggle").checked = false;
 
@@ -784,6 +904,126 @@ function toast(message, type = "info") {
   t.textContent = message;
   wrap.appendChild(t);
   setTimeout(() => t.remove(), 4200);
+}
+
+// ── Filter Builder Logic ──────────────────────────────────────────────────────
+function openFilterBuilder() {
+  builderState = { name: "", icon: "🔍", color: "#3b82f6", tree: { id: "root", op: "AND", conditions: [] } };
+  el("filter-name").value = "";
+  el("filter-icon").value = "🔍";
+  el("filter-color").value = "#3b82f6";
+  renderBuilder();
+  el("filter-modal").classList.add("open");
+}
+
+function closeFilterBuilder() { el("filter-modal").classList.remove("open"); }
+
+function renderBuilder() {
+  const root = el("builder-root");
+  root.innerHTML = renderGroup(builderState.tree);
+}
+
+function renderGroup(group) {
+  return `
+    <div class="builder-group" data-id="${group.id}">
+      <div class="group-header">
+        <select onchange="updateGroupOp('${group.id}', this.value)">
+          <option value="AND" ${group.op === 'AND' ? 'selected' : ''}>AND</option>
+          <option value="OR" ${group.op === 'OR' ? 'selected' : ''}>OR</option>
+        </select>
+        <button class="btn btn-ghost btn-mini" onclick="addRule('${group.id}')">+ Rule</button>
+        <button class="btn btn-ghost btn-mini" onclick="addGroup('${group.id}')">+ Group</button>
+        ${group.id !== 'root' ? `<button class="btn btn-danger btn-mini" onclick="removeNode('${group.id}')">×</button>` : ''}
+      </div>
+      <div class="group-content">
+        ${group.conditions.map(c => c.op ? renderGroup(c) : renderRule(c, group.id)).join("")}
+      </div>
+    </div>`;
+}
+
+function renderRule(rule, groupId) {
+  const fieldDef = FILTER_FIELDS[rule.field] || { type: "string" };
+  const ops = OPERATORS_BY_TYPE[fieldDef.type] || [];
+  return `
+    <div class="builder-rule" data-id="${rule.id}">
+      <select class="rule-field" onchange="updateRule('${rule.id}', 'field', this.value)">
+        ${Object.entries(FILTER_FIELDS).map(([k,v]) => `<option value="${k}" ${rule.field === k ? 'selected' : ''}>${v.label}</option>`).join("")}
+      </select>
+      <select class="rule-op" onchange="updateRule('${rule.id}', 'op', this.value)">
+        ${ops.map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
+      </select>
+      ${fieldDef.type === 'boolean' ? `
+        <select class="rule-value" onchange="updateRule('${rule.id}', 'value', this.value === 'true')">
+          <option value="true" ${rule.value === true ? 'selected' : ''}>True</option>
+          <option value="false" ${rule.value === false ? 'selected' : ''}>False</option>
+        </select>` : `
+        <input class="rule-value" type="${fieldDef.type === 'number' ? 'number' : 'text'}" 
+               value="${rule.value || ''}" oninput="updateRule('${rule.id}', 'value', this.value)">`}
+      <button class="btn btn-ghost btn-mini" onclick="removeNode('${rule.id}')">×</button>
+    </div>`;
+}
+
+function findNode(tree, id) {
+  if (tree.id === id) return tree;
+  for (let c of tree.conditions) {
+    if (c.id === id) return c;
+    if (c.conditions) { let found = findNode(c, id); if (found) return found; }
+  }
+  return null;
+}
+
+function addRule(groupId) {
+  const group = findNode(builderState.tree, groupId);
+  group.conditions.push({ id: Math.random().toString(36).substr(2, 9), field: "handle", op: "contains", value: "" });
+  renderBuilder();
+}
+
+function addGroup(groupId) {
+  const group = findNode(builderState.tree, groupId);
+  group.conditions.push({ id: Math.random().toString(36).substr(2, 9), op: "AND", conditions: [] });
+  renderBuilder();
+}
+
+function removeNode(id) {
+  const removeRecursive = (parent) => {
+    parent.conditions = parent.conditions.filter(c => c.id !== id);
+    parent.conditions.forEach(c => { if (c.conditions) removeRecursive(c); });
+  };
+  removeRecursive(builderState.tree);
+  renderBuilder();
+}
+
+function updateRule(id, key, val) {
+  const node = findNode(builderState.tree, id);
+  node[key] = val;
+  if (key === 'field') { node.op = 'eq'; node.value = ''; renderBuilder(); }
+}
+
+function updateGroupOp(id, op) { findNode(builderState.tree, id).op = op; }
+
+async function saveFilterSet() {
+  const name = el("filter-name").value.trim();
+  if (!name) return toast("Name required", "error");
+  const payload = {
+    name, icon: el("filter-icon").value, color: el("filter-color").value,
+    condition_tree: JSON.stringify(builderState.tree)
+  };
+  await api(`/api/filters/${state.activeAlias}`, { method: "POST", body: JSON.stringify(payload) });
+  closeFilterBuilder();
+  await loadFilterSets();
+}
+
+async function loadFilterSets() {
+  if (!state.activeAlias) return;
+  state.customFilters = await api(`/api/filters/${state.activeAlias}`);
+  renderCustomFilters();
+}
+
+async function deleteFilterSet(e, id) {
+  e.stopPropagation();
+  if (!confirm("Delete this filter?")) return;
+  await api(`/api/filters/${state.activeAlias}/${id}`, { method: "DELETE" });
+  await loadFilterSets();
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────

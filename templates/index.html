@@ -74,6 +74,10 @@
     <div class="stat-label">Discovered</div>
   </div>
   <div class="stat-box">
+    <div class="stat-val" id="stat-stubs">—</div>
+    <div class="stat-label">Stubs</div>
+  </div>
+  <div class="stat-box">
     <div class="stat-val" id="stat-analysed">—</div>
     <div class="stat-label">Analysed</div>
   </div>
@@ -91,6 +95,13 @@
     <div class="sidebar-section">
       <div class="sidebar-label">Views</div>
       <div id="nav-items"></div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-label" style="display:flex; justify-content:space-between; align-items:center;">
+        Custom Filters
+        <button class="btn btn-ghost" style="padding:0 0.3rem; height:18px; font-size:0.6rem;" onclick="openFilterBuilder()">+</button>
+      </div>
+      <div id="custom-filters"></div>
     </div>
   </nav>
 
@@ -160,6 +171,37 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeAddAccount()">Cancel</button>
       <button class="btn btn-primary" onclick="submitAddAccount()">Save Account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Filter Builder Modal ────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="filter-modal" onclick="if(event.target===this)closeFilterBuilder()">
+  <div class="modal" style="max-width: 750px; width: 95%;">
+    <div class="modal-title">Filter Builder</div>
+    
+    <div class="field">
+      <label>Filter Name</label>
+      <input id="filter-name" type="text" placeholder="e.g. My Custom Filter" autocomplete="off">
+    </div>
+
+    <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+      <div class="field" style="flex: 1;">
+        <label>Icon (Emoji)</label>
+        <input id="filter-icon" type="text" placeholder="🔍" maxlength="2">
+      </div>
+      <div class="field" style="flex: 1;">
+        <label>Color</label>
+        <input id="filter-color" type="color" value="#3b82f6" style="height: 38px; padding: 2px; cursor: pointer;">
+      </div>
+    </div>
+
+    <div class="sidebar-label">Logic Blocks</div>
+    <div id="builder-root" class="builder-container"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeFilterBuilder()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveFilterSet()">Save Filter</button>
     </div>
   </div>
 </div>

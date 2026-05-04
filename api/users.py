@@ -35,6 +35,7 @@ class TrackedUserResponse(BaseModel):
     repost_count: int
     original_post_count: int
     sampled_post_count: int
+    first_seen_at: str | None
     interacted_with_owner: bool
     is_inactive: bool
     is_repost_heavy: bool
@@ -46,9 +47,13 @@ class TrackedUserResponse(BaseModel):
     flowrank_score: float | None
     community_id: int | None
     in_subgraph_degree: int
+    crawl_priority: float | None
+    clustering_coefficient: float | None
     crawl_tier: int
     discovered_via: str | None
     last_analyzed_at: str | None
+    last_hydrated_at: str | None
+    last_crawled_at: str | None
 
 
 def _dt(value):
@@ -74,6 +79,7 @@ def _serialize(u: dict) -> TrackedUserResponse:
         repost_count=u["repost_count"] or 0,
         original_post_count=u["original_post_count"] or 0,
         sampled_post_count=u["sampled_post_count"] or 0,
+        first_seen_at=_dt(u["first_seen_at"]) if u["first_seen_at"] else None,
         interacted_with_owner=bool(u["interacted_with_owner"]),
         is_inactive=bool(u["is_inactive"]),
         is_repost_heavy=bool(u["is_repost_heavy"]),
@@ -84,9 +90,13 @@ def _serialize(u: dict) -> TrackedUserResponse:
         flowrank_score=u["flowrank_score"],
         community_id=u["community_id"],
         in_subgraph_degree=u["in_subgraph_degree"] or 0,
+        crawl_priority=u["crawl_priority"],
+        clustering_coefficient=u["clustering_coefficient"],
         crawl_tier=u["crawl_tier"] or 0,
         discovered_via=u["discovered_via"],
         last_analyzed_at=_dt(u["last_analyzed_at"]) if u["last_analyzed_at"] else None,
+        last_hydrated_at=_dt(u["last_hydrated_at"]) if u["last_hydrated_at"] else None,
+        last_crawled_at=_dt(u["last_crawled_at"]) if u["last_crawled_at"] else None,
     )
 
 
@@ -119,6 +129,7 @@ async def list_users(
     blocked: Optional[bool] = Query(None),
     exclude_stubs: bool = Query(False),
     exclude_unanalyzed: bool = Query(False),
+    is_stub: Optional[bool] = Query(None),
     # Advanced / Graph filters
     filter_tree: Optional[str] = Query(None),
     min_flowrank: Optional[float] = Query(None),
@@ -129,6 +140,20 @@ async def list_users(
     max_repost_ratio: Optional[float] = Query(None, ge=0.0, le=1.0),
     min_followers: Optional[int] = Query(None, ge=0),
     max_followers: Optional[int] = Query(None, ge=0),
+    min_sampled_post_count: Optional[int] = Query(None, ge=0),
+    max_sampled_post_count: Optional[int] = Query(None, ge=0),
+    min_repost_count: Optional[int] = Query(None, ge=0),
+    max_repost_count: Optional[int] = Query(None, ge=0),
+    min_original_post_count: Optional[int] = Query(None, ge=0),
+    max_original_post_count: Optional[int] = Query(None, ge=0),
+    min_crawl_priority: Optional[float] = Query(None, ge=0.0),
+    max_crawl_priority: Optional[float] = Query(None, ge=0.0),
+    min_clustering_coefficient: Optional[float] = Query(None, ge=0.0),
+    max_clustering_coefficient: Optional[float] = Query(None, ge=0.0),
+    before_last_hydrated_at: Optional[str] = Query(None),
+    after_last_hydrated_at: Optional[str] = Query(None),
+    before_last_crawled_at: Optional[str] = Query(None),
+    after_last_crawled_at: Optional[str] = Query(None),
     # Sorting
     sort_by: str = Query("handle"),
     sort_dir: str = Query("asc", pattern="^(asc|desc)$"),
@@ -161,8 +186,10 @@ async def list_users(
         search=search,
         flags=flags or None,
         filter_tree=filter_tree,
+        # The following individual parameters will be ignored if filter_tree is provided
         exclude_stubs=exclude_stubs,
         exclude_unanalyzed=exclude_unanalyzed,
+        is_stub=is_stub,
         min_flowrank=min_flowrank,
         min_in_degree=min_in_degree,
         min_days_inactive=min_days_inactive,
@@ -170,6 +197,20 @@ async def list_users(
         max_repost_ratio=max_repost_ratio,
         min_followers=min_followers,
         max_followers=max_followers,
+        min_sampled_post_count=min_sampled_post_count,
+        max_sampled_post_count=max_sampled_post_count,
+        min_repost_count=min_repost_count,
+        max_repost_count=max_repost_count,
+        min_original_post_count=min_original_post_count,
+        max_original_post_count=max_original_post_count,
+        min_crawl_priority=min_crawl_priority,
+        max_crawl_priority=max_crawl_priority,
+        min_clustering_coefficient=min_clustering_coefficient,
+        max_clustering_coefficient=max_clustering_coefficient,
+        before_last_hydrated_at=before_last_hydrated_at,
+        after_last_hydrated_at=after_last_hydrated_at,
+        before_last_crawled_at=before_last_crawled_at,
+        after_last_crawled_at=after_last_crawled_at,
         sort_by=sort_by,
         sort_dir=sort_dir,
         limit=limit,

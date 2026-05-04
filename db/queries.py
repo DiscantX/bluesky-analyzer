@@ -4,7 +4,7 @@ Joined query helpers for shared profiles plus per-account relationship state.
 """
 
 from __future__ import annotations
-
+import json
 from typing import Any
 from tortoise import connections
 
@@ -23,11 +23,17 @@ SORTABLE_FIELDS = {
     "is_repost_heavy": "p.is_repost_heavy",
     "is_one_sided_follow": "r.is_one_sided_follow",
     "is_follower_only": "r.is_follower_only",
-    "interacted_with_owner": "r.interacted_with_owner",
+    "sampled_post_count": "p.sampled_post_count",
+    "repost_count": "p.repost_count",
+    "original_post_count": "p.original_post_count",
     "flowrank_score": "r.flowrank_score",
     "clustering_coefficient": "r.clustering_coefficient",
     "in_subgraph_degree": "r.in_subgraph_degree",
     "crawl_priority": "r.crawl_priority",
+    "interacted_with_owner": "r.interacted_with_owner",
+    "last_hydrated_at": "p.last_hydrated_at",
+    "last_crawled_at": "r.last_crawled_at",
+    "first_seen_at": "p.first_seen_at",
 }
 
 FILTERABLE_FLAGS = {
@@ -40,8 +46,55 @@ FILTERABLE_FLAGS = {
     "interacted_with_owner": "r.interacted_with_owner",
     "muted": "r.muted",
     "blocked": "r.blocked",
+    "is_stub": "r.crawl_tier", # Special handling for is_stub
     "crawl_tier": "r.crawl_tier",
     "community_id": "r.community_id",
+    "discovered_via": "r.discovered_via",
+}
+
+FILTERABLE_FIELDS_MAP = {
+    # Boolean flags (from AccountRelationship)
+    "i_follow_them": "r.i_follow_them",
+    "they_follow_me": "r.they_follow_me",
+    "interacted_with_owner": "r.interacted_with_owner",
+    "muted": "r.muted",
+    "blocked": "r.blocked",
+    "is_one_sided_follow": "r.is_one_sided_follow",
+    "is_follower_only": "r.is_follower_only",
+    # Boolean flags (from Profile)
+    "is_inactive": "p.is_inactive",
+    "is_repost_heavy": "p.is_repost_heavy",
+
+    # Numeric fields (from Profile)
+    "followers_count": "p.followers_count",
+    "follows_count": "p.follows_count",
+    "posts_count": "p.posts_count",
+    "days_since_post": "p.days_since_post",
+    "repost_ratio": "p.repost_ratio",
+    "sampled_post_count": "p.sampled_post_count",
+    "repost_count": "p.repost_count",
+    "original_post_count": "p.original_post_count",
+
+    # Numeric fields (from AccountRelationship)
+    "flowrank_score": "r.flowrank_score",
+    "clustering_coefficient": "r.clustering_coefficient",
+    "in_subgraph_degree": "r.in_subgraph_degree",
+    "crawl_priority": "r.crawl_priority",
+    "crawl_tier": "r.crawl_tier",
+    "community_id": "r.community_id",
+
+    # Date fields (from Profile)
+    "last_post_at": "p.last_post_at",
+    "last_analyzed_at": "p.last_analyzed_at",
+    "last_hydrated_at": "p.last_hydrated_at",
+    "first_seen_at": "p.first_seen_at",
+
+    # Date fields (from AccountRelationship)
+    "last_crawled_at": "r.last_crawled_at",
+
+    # String fields (from Profile/AccountRelationship)
+    "handle": "p.handle",
+    "display_name": "p.display_name",
     "discovered_via": "r.discovered_via",
 }
 
@@ -64,6 +117,7 @@ SELECT_FIELDS = """
     p.repost_count,
     p.original_post_count,
     p.sampled_post_count,
+    p.first_seen_at,
     r.interacted_with_owner,
     p.is_inactive,
     p.is_repost_heavy,
@@ -75,8 +129,12 @@ SELECT_FIELDS = """
     r.community_id,
     r.in_subgraph_degree,
     r.crawl_tier,
+    r.crawl_priority,
+    r.clustering_coefficient,
     r.discovered_via,
-    p.last_analyzed_at
+    r.last_crawled_at,
+    p.last_analyzed_at,
+    p.last_hydrated_at
 """
 
 
@@ -84,11 +142,88 @@ def _bool_param(value: bool) -> int:
     return 1 if value else 0
 
 
+def _build_recursive_where_clause(condition_tree: dict, params: list[Any]) -> str:
+    """
+    Recursively translates a FilterSet JSON tree into SQL.
+    Structure: {"op": "AND"|"OR", "conditions": [rule|group]}
+    Rule: {"field": "...", "op": "...", "value": ...}
+    """
+    op = condition_tree.get("op", "AND").upper()
+    conditions = condition_tree.get("conditions", [])
+
+    if not conditions:
+        return "1=1"
+
+    parts = []
+    for cond in conditions:
+        # Nested logic group
+        if "op" in cond and "conditions" in cond:
+            parts.append(f"({_build_recursive_where_clause(cond, params)})")
+            continue
+
+        # Leaf condition
+        field = cond.get("field")
+        cond_op = cond.get("op")
+        value = cond.get("value")
+
+        column = FILTERABLE_FIELDS_MAP.get(field)
+        if not column:
+            continue
+
+        if cond_op == "eq":
+            if value is None:
+                parts.append(f"{column} IS NULL")
+            else:
+                parts.append(f"{column} = ?")
+                params.append(_bool_param(value) if isinstance(value, bool) else value)
+        elif cond_op == "neq":
+            if value is None:
+                parts.append(f"{column} IS NOT NULL")
+            else:
+                parts.append(f"{column} != ?")
+                params.append(_bool_param(value) if isinstance(value, bool) else value)
+        elif cond_op == "gt":
+            parts.append(f"{column} > ?")
+            params.append(value)
+        elif cond_op == "gte":
+            parts.append(f"{column} >= ?")
+            params.append(value)
+        elif cond_op == "lt":
+            parts.append(f"{column} < ?")
+            params.append(value)
+        elif cond_op == "lte":
+            parts.append(f"{column} <= ?")
+            params.append(value)
+        elif cond_op == "between":
+            if isinstance(value, list) and len(value) == 2:
+                parts.append(f"{column} BETWEEN ? AND ?")
+                params.extend(value)
+        elif cond_op == "contains":
+            parts.append(f"{column} LIKE ?")
+            params.append(f"%{value}%")
+        elif cond_op == "starts_with":
+            parts.append(f"{column} LIKE ?")
+            params.append(f"{value}%")
+        elif cond_op == "ends_with":
+            parts.append(f"{column} LIKE ?")
+            params.append(f"%{value}")
+        elif cond_op == "is_null":
+            parts.append(f"{column} IS NULL")
+        elif cond_op == "is_not_null":
+            parts.append(f"{column} IS NOT NULL")
+
+    if not parts:
+        return "1=1"
+
+    return f" {op} ".join(parts)
+
+
 def _where(
     owner_id: int,
     *,
     search: str | None = None,
     flags: dict[str, bool] | None = None,
+    filter_tree: dict | str | None = None,
     min_days_inactive: int | None = None,
     min_repost_ratio: float | None = None,
     max_repost_ratio: float | None = None,
@@ -98,6 +233,21 @@ def _where(
     min_in_degree: int | None = None,
     exclude_stubs: bool = False,
     exclude_unanalyzed: bool = False,
+    is_stub: bool | None = None,
+    min_sampled_post_count: int | None = None,
+    max_sampled_post_count: int | None = None,
+    min_repost_count: int | None = None,
+    max_repost_count: int | None = None,
+    min_original_post_count: int | None = None,
+    max_original_post_count: int | None = None,
+    min_crawl_priority: float | None = None,
+    max_crawl_priority: float | None = None,
+    min_clustering_coefficient: float | None = None,
+    max_clustering_coefficient: float | None = None,
+    before_last_hydrated_at: str | None = None,
+    after_last_hydrated_at: str | None = None,
+    before_last_crawled_at: str | None = None,
+    after_last_crawled_at: str | None = None,
 ) -> tuple[str, list[Any]]:
     clauses = ["r.owner_id = ?"]
     params: list[Any] = [owner_id]
@@ -106,12 +256,25 @@ def _where(
         clauses.append("(p.handle LIKE ? OR p.display_name LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
 
+    if filter_tree:
+        if isinstance(filter_tree, str):
+            filter_tree = json.loads(filter_tree)
+        clauses.append(f"({_build_recursive_where_clause(filter_tree, params)})")
+        return " AND ".join(clauses), params
+
     if flags:
         for field, value in flags.items():
+            if field == "is_stub": continue
             column = FILTERABLE_FLAGS.get(field)
             if column:
                 clauses.append(f"{column} = ?")
                 params.append(_bool_param(value) if isinstance(value, bool) else value)
+    
+    if is_stub is not None:
+        if is_stub:
+            clauses.append("r.crawl_tier = 0")
+        else:
+            clauses.append("r.crawl_tier > 0")
 
     if exclude_stubs:
         clauses.append("r.crawl_tier > 0")
@@ -139,6 +302,50 @@ def _where(
     if min_in_degree is not None:
         clauses.append("r.in_subgraph_degree >= ?")
         params.append(min_in_degree)
+    
+    if min_sampled_post_count is not None:
+        clauses.append("p.sampled_post_count >= ?")
+        params.append(min_sampled_post_count)
+    if max_sampled_post_count is not None:
+        clauses.append("p.sampled_post_count <= ?")
+        params.append(max_sampled_post_count)
+    if min_repost_count is not None:
+        clauses.append("p.repost_count >= ?")
+        params.append(min_repost_count)
+    if max_repost_count is not None:
+        clauses.append("p.repost_count <= ?")
+        params.append(max_repost_count)
+    if min_original_post_count is not None:
+        clauses.append("p.original_post_count >= ?")
+        params.append(min_original_post_count)
+    if max_original_post_count is not None:
+        clauses.append("p.original_post_count <= ?")
+        params.append(max_original_post_count)
+    if min_crawl_priority is not None:
+        clauses.append("r.crawl_priority >= ?")
+        params.append(min_crawl_priority)
+    if max_crawl_priority is not None:
+        clauses.append("r.crawl_priority <= ?")
+        params.append(max_crawl_priority)
+    if min_clustering_coefficient is not None:
+        clauses.append("r.clustering_coefficient >= ?")
+        params.append(min_clustering_coefficient)
+    if max_clustering_coefficient is not None:
+        clauses.append("r.clustering_coefficient <= ?")
+        params.append(max_clustering_coefficient)
+
+    if before_last_hydrated_at is not None:
+        clauses.append("p.last_hydrated_at < ?")
+        params.append(before_last_hydrated_at)
+    if after_last_hydrated_at is not None:
+        clauses.append("p.last_hydrated_at > ?")
+        params.append(after_last_hydrated_at)
+    if before_last_crawled_at is not None:
+        clauses.append("r.last_crawled_at < ?")
+        params.append(before_last_crawled_at)
+    if after_last_crawled_at is not None:
+        clauses.append("r.last_crawled_at > ?")
+        params.append(after_last_crawled_at)
 
     return " AND ".join(clauses), params
 
@@ -158,16 +365,31 @@ async def query_users(
     min_in_degree: int | None = None,
     exclude_stubs: bool = False,
     exclude_unanalyzed: bool = False,
+    is_stub: bool | None = None,
+    min_sampled_post_count: int | None = None,
+    max_sampled_post_count: int | None = None,
+    min_repost_count: int | None = None,
+    max_repost_count: int | None = None,
+    min_original_post_count: int | None = None,
+    max_original_post_count: int | None = None,
+    min_crawl_priority: float | None = None,
+    max_crawl_priority: float | None = None,
+    min_clustering_coefficient: float | None = None,
+    max_clustering_coefficient: float | None = None,
+    before_last_hydrated_at: str | None = None,
+    after_last_hydrated_at: str | None = None,
+    before_last_crawled_at: str | None = None,
+    after_last_crawled_at: str | None = None,
     sort_by: str = "handle",
     sort_dir: str = "asc",
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
-    # TODO: port recursive FilterSet trees to SQL once the new schema settles.
     where_sql, params = _where(
         owner_id,
         search=search,
         flags=flags,
+        filter_tree=filter_tree,
         min_days_inactive=min_days_inactive,
         min_repost_ratio=min_repost_ratio,
         max_repost_ratio=max_repost_ratio,
@@ -177,6 +399,21 @@ async def query_users(
         min_in_degree=min_in_degree,
         exclude_stubs=exclude_stubs,
         exclude_unanalyzed=exclude_unanalyzed,
+        is_stub=is_stub,
+        min_sampled_post_count=min_sampled_post_count,
+        max_sampled_post_count=max_sampled_post_count,
+        min_repost_count=min_repost_count,
+        max_repost_count=max_repost_count,
+        min_original_post_count=min_original_post_count,
+        max_original_post_count=max_original_post_count,
+        min_crawl_priority=min_crawl_priority,
+        max_crawl_priority=max_crawl_priority,
+        min_clustering_coefficient=min_clustering_coefficient,
+        max_clustering_coefficient=max_clustering_coefficient,
+        before_last_hydrated_at=before_last_hydrated_at,
+        after_last_hydrated_at=after_last_hydrated_at,
+        before_last_crawled_at=before_last_crawled_at,
+        after_last_crawled_at=after_last_crawled_at,
     )
     order_col = SORTABLE_FIELDS.get(sort_by, "p.handle")
     direction = "DESC" if sort_dir == "desc" else "ASC"
@@ -219,7 +456,8 @@ async def get_stats(owner_id: int) -> dict[str, Any]:
             SUM(CASE WHEN r.interacted_with_owner = 0 AND r.i_follow_them = 1 THEN 1 ELSE 0 END) AS no_interaction,
             COUNT(*) AS graph_size,
             SUM(CASE WHEN p.last_analyzed_at IS NOT NULL THEN 1 ELSE 0 END) AS analysed,
-            SUM(CASE WHEN p.last_analyzed_at IS NULL THEN 1 ELSE 0 END) AS pending
+            SUM(CASE WHEN p.last_analyzed_at IS NULL THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN r.crawl_tier = 0 THEN 1 ELSE 0 END) AS stubs_count
         FROM account_relationships r
         JOIN profiles p ON p.id = r.profile_id
         WHERE r.owner_id = ?
