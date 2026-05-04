@@ -320,24 +320,62 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   USER TABLE
+   USER LIST GRID
 ───────────────────────────────────────────────────────────────────────────── */
-.user-list {
-  flex: 1;
-  overflow-y: auto;
-}
+.user-list { flex: 1; overflow: auto; }
 
-.user-row {
-  display: flex;
+.user-grid {
+  display: grid;
+  /* We use minmax(0, ...) to allow columns to shrink and fixed widths for stats to ensure alignment */
+  grid-template-columns: 44px minmax(120px, 1fr) minmax(120px, 1fr) 80px 80px 80px 80px 70px 60px 100px 100px;
   align-items: center;
   gap: 0.75rem;
   padding: 0.55rem 1rem;
+  min-width: 1100px; /* Ensures the table doesn't collapse into a vertical mess */
+}
+
+.user-list-header {
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.header-col {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  transition: color 0.15s;
+}
+.header-col:hover { color: var(--text); }
+.header-col.active { color: var(--accent); }
+
+.col-stat, .col-date { text-align: right; justify-content: flex-end; }
+
+.user-row {
+  display: block;
   border-bottom: 1px solid var(--border);
   transition: background 0.1s;
   text-decoration: none;
   color: inherit;
 }
 .user-row:hover { background: var(--surface2); }
+
+.badges-row {
+  padding: 0 1rem 0.6rem 4.5rem; /* Aligned with grid text columns */
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: -0.2rem;
+}
 
 .avatar {
   width: 36px;
@@ -363,7 +401,6 @@ body {
   flex-shrink: 0;
 }
 
-.user-info { flex: 1; min-width: 0; }
 .user-name {
   font-weight: 700;
   font-size: 0.82rem;
@@ -375,13 +412,9 @@ body {
   font-family: var(--mono);
   font-size: 0.68rem;
   color: var(--muted);
-}
-
-.user-meta {
-  display: flex;
-  gap: 1.25rem;
-  align-items: center;
-  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .meta-item {
   text-align: right;
@@ -575,7 +608,12 @@ body {
 ───────────────────────────────────────────────────────────────────────────── */
 @media (max-width: 700px) {
   .sidebar { display: none; }
-  .user-meta { display: none; }
   .stats-strip { overflow-x: auto; }
   .stat-box { min-width: 90px; }
+  
+  /* Ensure the user can scroll the table horizontally on mobile */
+  .user-list {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }

@@ -13,6 +13,7 @@ const state = {
   syncStream: null,
   crawlStream: null,
   statusTimer: null,
+  lastUserFetch: 0,
   settings: {},
 
   // Filter / sort state — any new filter just gets added here
@@ -36,7 +37,7 @@ const state = {
     max_followers: null,
   },
   sort: { by: "handle", dir: "asc" },
-  pagination: { limit: 200, offset: 0 },
+  pagination: { limit: 50, offset: 0 },
   activeTab: "all",
 };
 
@@ -119,55 +120,47 @@ function badges(u) {
   if (!u.interacted_with_owner && u.i_follow_them)
                             b.push(`<span class="badge badge-nointeract">💤 no interact</span>`);
   
-  // New Graph Badges
-  if (u.flowrank_score > 0) {
-    const rankVal = (u.flowrank_score * 1000).toFixed(2);
-    b.push(`<span class="badge" style="background:rgba(167,139,250,0.1);color:var(--accent2);border:1px solid rgba(167,139,250,0.3)">💎 Rank: ${rankVal}</span>`);
-  }
-  if (u.community_id !== null && u.community_id !== undefined) {
-    b.push(`<span class="badge" style="background:rgba(255,255,255,0.05);color:var(--muted)">🌐 Grp ${u.community_id}</span>`);
-  }
   return b.join("");
+}
+
+function shortDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
 }
 
 function userRow(u) {
   return `
     <a class="user-row" href="${u.profile_url}" target="_blank" rel="noopener">
-      ${avatar(u)}
-      <div class="user-info">
-        <div class="user-name">${u.display_name || u.handle}</div>
-        <div class="user-handle">@${u.handle}</div>
+      <div class="user-grid">
+        ${avatar(u)}
+        <div class="user-name" title="${u.display_name}" style="min-width:0">${u.display_name || "—"}</div>
+        <div class="user-handle" title="${u.handle}" style="min-width:0">@${u.handle}</div>
+        <div class="col-stat">${fmt(u.followers_count)}</div>
+        <div class="col-stat">${u.days_since_post != null ? u.days_since_post + "d" : "—"}</div>
+        <div class="col-stat">${pct(u.repost_ratio)}</div>
+        <div class="col-stat">${fmt(u.posts_count)}</div>
+        <div class="col-stat" title="FlowRank Influence">💎 ${u.flowrank_score > 0 ? (u.flowrank_score * 1000).toFixed(2) : "—"}</div>
+        <div class="col-stat" title="Community ID">🌐 ${u.community_id != null ? u.community_id : "—"}</div>
+        <div class="col-date">${shortDate(u.last_post_at)}</div>
+        <div class="col-date">${shortDate(u.last_analyzed_at)}</div>
       </div>
-      <div class="badges">${badges(u)}</div>
-      <div class="user-meta">
-        <div class="meta-item">
-          <div class="meta-val">${fmt(u.followers_count)}</div>
-          <div class="meta-lbl">followers</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-val">${u.days_since_post != null ? u.days_since_post + "d" : "—"}</div>
-          <div class="meta-lbl">inactive</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-val">${pct(u.repost_ratio)}</div>
-          <div class="meta-lbl">reposts</div>
-        </div>
-      </div>
+      <div class="badges-row">${badges(u)}</div>
     </a>`;
 }
 
 // ── Stats strip ───────────────────────────────────────────────────────────────
 function renderStats() {
   const s = state.stats;
-  el("stat-follows").textContent    = fmt(s.total_follows ?? "—");
-  el("stat-followers").textContent  = fmt(s.total_followers ?? "—");
-  el("stat-inactive").textContent   = fmt(s.inactive ?? "—");
-  el("stat-repost").textContent     = fmt(s.repost_heavy ?? "—");
-  el("stat-onesided").textContent   = fmt(s.one_sided ?? "—");
-  el("stat-nointeract").textContent = fmt(s.no_interaction ?? "—");
-  el("stat-discovered").textContent = fmt(s.graph_size ?? "—");
-  el("stat-analysed").textContent   = fmt(s.analysed ?? "—");
-  el("stat-pending").textContent    = fmt(s.pending ?? "—");
+  el("stat-follows").textContent   = fmt(s.total_follows);
+  el("stat-followers").textContent = fmt(s.total_followers);
+  el("stat-inactive").textContent  = fmt(s.inactive);
+  el("stat-repost").textContent    = fmt(s.repost_heavy);
+  el("stat-onesided").textContent  = fmt(s.one_sided);
+  el("stat-nointeract").textContent= fmt(s.no_interaction);
+  el("stat-discovered").textContent= fmt(s.graph_size);
+  el("stat-analysed").textContent  = fmt(s.analysed);
+  el("stat-pending").textContent   = fmt(s.pending);
 
   const synced = s.last_synced_at
     ? new Date(s.last_synced_at).toLocaleString()
@@ -196,35 +189,88 @@ function renderNav() {
   }).join("");
 }
 
+function renderHeader(label, field, isStat = false) {
+  const active = state.sort.by === field;
+  const dir = state.sort.dir === "asc" ? "↑" : "↓";
+  return `
+    <div class="header-col ${active ? 'active' : ''} ${isStat ? 'col-stat' : ''}" 
+         onclick="sortByHeader('${field}')">
+      ${label} ${active ? dir : ''}
+    </div>`;
+}
+
+function sortByHeader(field) {
+  if (state.sort.by === field) {
+    state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+  } else {
+    state.sort.by = field;
+    // Default to DESC for numbers/dates, ASC for names
+    const descDefaults = ["followers_count", "days_since_post", "repost_ratio", "posts_count", "last_post_at", "last_analyzed_at", "flowrank_score", "community_id"];
+    state.sort.dir = descDefaults.includes(field) ? "desc" : "asc";
+  }
+  state.pagination.offset = 0;
+  fetchUsers();
+}
+
+/**
+ * Setup the infinite scroll listener for the user list.
+ */
+function initLazyLoading() {
+  const list = el("user-list");
+  if (!list) return;
+
+  list.addEventListener("scroll", () => {
+    // If we're already loading or have reached the end, do nothing
+    if (state.loading || state.users.length >= state.total) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = list;
+    
+    // Trigger when user is within 200px of the bottom
+    if (scrollTop + clientHeight >= scrollHeight - 200) {
+      loadMoreUsers();
+    }
+  });
+}
+
+async function loadMoreUsers() {
+  if (state.loading || state.users.length >= state.total) return;
+  
+  // Increment offset and fetch next batch
+  state.pagination.offset += state.pagination.limit;
+  await fetchUsers(true);
+}
+
 // ── User list ─────────────────────────────────────────────────────────────────
 function renderUsers() {
   const list = el("user-list");
 
   if (state.loading && state.users.length === 0) {
-    list.innerHTML = `<div class="state-box">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/>
-      </svg>
-      Loading…</div>`;
+    list.innerHTML = `<div class="state-box">Loading…</div>`;
     return;
   }
-
-  if (!state.activeAlias) {
-    list.innerHTML = `<div class="state-box">
-      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
-        <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
-      </svg>
-      Add an account to get started</div>`;
-    return;
-  }
-
   if (state.users.length === 0) {
-    list.innerHTML = `<div class="state-box">No accounts match your filters.</div>`;
+    list.innerHTML = `<div class="state-box">No users found. Try syncing or changing filters.</div>`;
     el("result-count").textContent = "0 results";
     return;
   }
 
-  list.innerHTML = state.users.map(userRow).join("");
+  const headers = `
+    <div class="user-list-header user-grid">
+      <div></div>
+      ${renderHeader("Name", "display_name")}
+      ${renderHeader("Handle", "handle")}
+      ${renderHeader("Followers", "followers_count", true)}
+      ${renderHeader("Inactive", "days_since_post", true)}
+      ${renderHeader("Repost %", "repost_ratio", true)}
+      ${renderHeader("Posts", "posts_count", true)}
+      ${renderHeader("Rank", "flowrank_score", true)}
+      ${renderHeader("Grp", "community_id", true)}
+      ${renderHeader("Last Post", "last_post_at", true)}
+      ${renderHeader("Analyzed", "last_analyzed_at", true)}
+    </div>
+  `;
+
+  list.innerHTML = headers + state.users.map(userRow).join("");
   el("result-count").textContent = `${fmt(state.total)} results`;
 }
 
@@ -248,14 +294,6 @@ function renderAccountPills() {
   }
 }
 
-// ── Sort controls ─────────────────────────────────────────────────────────────
-function renderSortControls() {
-  const sel = el("sort-by");
-  sel.innerHTML = SORT_OPTIONS.map(o =>
-    `<option value="${o.value}" ${state.sort.by === o.value ? "selected" : ""}>${o.label}</option>`
-  ).join("");
-}
-
 // ── Fetch data from API ───────────────────────────────────────────────────────
 async function fetchStats() {
   if (!state.activeAlias) return;
@@ -268,20 +306,27 @@ async function fetchStats() {
   }
 }
 
-async function fetchUsers() {
+async function fetchUsers(append = false, silent = false) {
   if (!state.activeAlias) return;
   state.loading = true;
+  state.lastUserFetch = Date.now();
   
-  // Only show loading state if we don't have existing data to display
-  if (state.users.length === 0) renderUsers();
+  // Hard reset: only clear and reset offset if it's not an append or a silent refresh
+  if (!append && !silent) {
+    state.pagination.offset = 0;
+    state.users = [];
+    renderUsers();
+  }
 
   const params = new URLSearchParams();
+  const limit = append ? state.pagination.limit : Math.max(state.pagination.limit, state.users.length);
+  const offset = append ? state.pagination.offset : 0;
 
   if (state.filters.search) params.set("search", state.filters.search);
   params.set("sort_by", state.sort.by);
   params.set("sort_dir", state.sort.dir);
-  params.set("limit", state.pagination.limit);
-  params.set("offset", state.pagination.offset);
+  params.set("limit", limit);
+  params.set("offset", offset);
 
   // Boolean filters — only send when not null
   const boolFlags = [
@@ -305,7 +350,12 @@ async function fetchUsers() {
 
   try {
     const data = await api(`/api/users/${state.activeAlias}?${params}`);
-    state.users = data.users;
+    
+    if (append) {
+      state.users = [...state.users, ...data.users];
+    } else {
+      state.users = data.users;
+    }
     state.total = data.total;
   } catch (e) {
     logError("fetchUsers failed:", e);
@@ -318,7 +368,7 @@ async function fetchUsers() {
 
 async function refresh() {
   await fetchStats();
-  await fetchUsers();
+  await fetchUsers(false, true);
 }
 
 async function reconcileOperationStatus() {
@@ -454,9 +504,11 @@ function attachSyncStream() {
 
     if (data.kind === "progress") {
       showSyncBar(data.message, data.pct);
-      // Refresh the UI list as we get updates
       fetchStats();
-      fetchUsers();
+      // Throttle user list updates during sync to once every 2 seconds
+      if (Date.now() - state.lastUserFetch > 2000) {
+        fetchUsers(false, true);
+      }
     } else if (data.kind === "phase") {
       showSyncBar(data.message, null);
     } else if (data.kind === "done") {
@@ -545,9 +597,10 @@ function attachCrawlStream() {
     const data = JSON.parse(evt.data);
     if (data.kind === "progress" || data.kind === "phase") {
       showSyncBar(data.message, data.pct ?? null);
-      // Refresh stats to show "Discovered" count increasing in real-time
       fetchStats();
-      fetchUsers();
+      if (Date.now() - state.lastUserFetch > 2000) {
+        fetchUsers(false, true);
+      }
     } else if (data.kind === "done") {
       es.close();
       state.crawlStream = null;
@@ -702,18 +755,6 @@ function onSearch(val) {
   }, 280);
 }
 
-function onSortBy(val) {
-  state.sort.by = val;
-  state.pagination.offset = 0;
-  fetchUsers();
-}
-
-function onSortDir() {
-  state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
-  el("sort-dir-btn").textContent = state.sort.dir === "asc" ? "↑" : "↓";
-  fetchUsers();
-}
-
 // ── Toast ─────────────────────────────────────────────────────────────────────
 function toast(message, type = "info") {
   const wrap = el("toast-wrap");
@@ -738,7 +779,7 @@ document.addEventListener("keydown", (e) => {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
-  renderSortControls();
   loadAccounts();
   startStatusWatcher();
+  initLazyLoading();
 });
