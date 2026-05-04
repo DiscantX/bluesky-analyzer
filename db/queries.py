@@ -134,8 +134,17 @@ def _bool_param(value: bool) -> int:
     return 1 if value else 0
 
 
-async def _resolve_field_sql(field_name: str, owner_id: int) -> str | None:
+async def _resolve_field_sql(field_name: Any, owner_id: int) -> str | None:
     """Resolves a field name to SQL, checking hardcoded map then Custom Variables."""
+    if isinstance(field_name, (int, float)):
+        return str(field_name)
+    
+    if isinstance(field_name, dict):
+        return await _build_math_sql(field_name, owner_id)
+
+    if not isinstance(field_name, str):
+        return None
+
     # 1. Check hardcoded columns
     col = FILTERABLE_FIELDS_MAP.get(field_name)
     if col:
@@ -153,8 +162,12 @@ async def _resolve_field_sql(field_name: str, owner_id: int) -> str | None:
 
 async def _build_math_sql(cond: dict, owner_id: int) -> str | None:
     """Helper to build math expressions from a node."""
-    left_field = cond.get("left_field") or cond.get("numerator")
+    left_field = cond.get("left_field")
+    if left_field == "__constant__":
+        left_field = cond.get("left_value", 0)
+    
     extra_terms = cond.get("extra_terms")
+    if left_field is None and cond.get("numerator"): left_field = cond.get("numerator")
 
     # Legacy support
     if left_field and extra_terms is None:
@@ -174,6 +187,9 @@ async def _build_math_sql(cond: dict, owner_id: int) -> str | None:
     for term in extra_terms:
         t_op = term.get("op")
         t_field = term.get("field")
+        if t_field == "__constant__":
+            t_field = term.get("value", 0)
+            
         col_right = await _resolve_field_sql(t_field, owner_id)
         if not col_right:
             return None

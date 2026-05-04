@@ -169,6 +169,7 @@ const OPERATORS_BY_TYPE = {
     { val: "gt", label: ">" }, { val: "gte", label: "≥" },
     { val: "lt", label: "<" }, { val: "lte", label: "≤" }
   ],
+  
   "variable": [
     { val: "eq", label: "=" }, { val: "neq", label: "≠" },
     { val: "gt", label: ">" }, { val: "gte", label: "≥" },
@@ -1065,20 +1066,40 @@ function renderRule(rule, groupId) {
 
   // ── Math Expression Logic ──
   if (fieldDef.type === 'math' || rule.field === '__math__') {
+    const isDefiningVariable = !!rule._editingVariableId;
+    
     if (!rule.extra_terms) {
       rule.extra_terms = [{ op: "div", field: "follows_count" }];
     }
 
+    const renderOperand = (currentField, currentValue, onFieldChange, onValueChange) => {
+        if (currentField === '__constant__') {
+            return `
+                <div style="display:flex; gap:2px">
+                    <input type="number" step="0.01" class="rule-field" style="width:60px" value="${currentValue || 0}" oninput="${onValueChange}">
+                    <button class="btn btn-ghost btn-mini" onclick="${onFieldChange}('followers_count')" title="Switch to Field">#</button>
+                </div>`;
+        }
+        return `
+            <select class="rule-field" style="width:110px" onchange="${onFieldChange}(this.value)">
+                ${renderFieldOptions(currentField, true)}
+            </select>`;
+    };
+
     const termsHtml = rule.extra_terms.map((term, idx) => {
       const mathOpts = MATH_OPS.map(o => `<option value="${o.val}" ${term.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("");
-      const fieldOpts = renderFieldOptions(term.field, true);
+      const operandHtml = renderOperand(
+          term.field, 
+          term.value, 
+          (v) => `updateMathTerm('${rule.id}', ${idx}, 'field', '${v}')`,
+          (v) => `updateMathTerm('${rule.id}', ${idx}, 'value', Number(this.value))`
+      );
+
       return `
         <select class="rule-field" style="width:40px; font-weight:bold" onchange="updateMathTerm('${rule.id}', ${idx}, 'op', this.value)">
           ${mathOpts}
         </select>
-        <select class="rule-field" style="width:110px" onchange="updateMathTerm('${rule.id}', ${idx}, 'field', this.value)">
-          ${fieldOpts}
-        </select>
+        ${operandHtml}
         ${rule.extra_terms.length > 1 ? `<button class="btn btn-ghost btn-mini" onclick="removeMathTerm('${rule.id}', ${idx})">×</button>` : ''}
       `;
     }).join("");
@@ -1089,20 +1110,29 @@ function renderRule(rule, groupId) {
       ? `<button class="btn btn-primary btn-mini" onclick="saveEditedVariable('${rule.id}', ${editingVarId})" title="Save changes to variable">✓ Save</button>
          <button class="btn btn-ghost btn-mini" onclick="cancelVariableEdit('${rule.id}', ${editingVarId})" title="Cancel edit">✕</button>`
       : `<button class="btn btn-ghost btn-mini" onclick="prepareVariableSave('${rule.id}')" title="Save as Variable">💾</button>`;
+   
+      const leftOperandHtml = renderOperand(
+        rule.left_field, 
+        rule.left_value, 
+        (v) => `updateRule('${rule.id}', 'left_field', '${v}')`,
+        (v) => `updateRule('${rule.id}', 'left_value', Number(this.value))`
+    );
 
-    return `
-      <div class="builder-rule builder-rule--math builder-rule--expanded" data-id="${rule.id}" style="flex-wrap: wrap;">
-        ${saveBtn}
-        <select class="rule-field" style="width:110px" onchange="updateRule('${rule.id}', 'left_field', this.value)">
-          ${renderFieldOptions(rule.left_field, true)}
-        </select>
-        ${termsHtml}
-        <button class="btn btn-ghost btn-mini" onclick="addMathTerm('${rule.id}')" title="Add term">+</button>
+    const comparisonHtml = isDefiningVariable ? '' : `
         <select class="rule-op" onchange="updateRule('${rule.id}', 'op', this.value)">
           ${ops.map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
         </select>
         <input class="rule-value" type="number" step="0.01" value="${rule.value || ''}"
                oninput="updateRule('${rule.id}', 'value', Number(this.value))">
+    `;
+
+    return `
+      <div class="builder-rule builder-rule--math builder-rule--expanded" data-id="${rule.id}" style="flex-wrap: wrap;">
+        ${saveBtn}
+        ${leftOperandHtml}
+        ${termsHtml}
+        <button class="btn btn-ghost btn-mini" onclick="addMathTerm('${rule.id}')" title="Add term">+</button>
+        ${comparisonHtml}
         <button class="btn btn-danger btn-mini" onclick="removeNode('${rule.id}')">×</button>
       </div>`;
   }
@@ -1189,6 +1219,7 @@ function renderFieldOptions(selectedValue, numericOnly = false) {
   return `
     ${varOpts ? `<optgroup label="My Variables">${varOpts}</optgroup>` : ''}
     ${rawGroupsHtml}
+    ${numericOnly ? `<optgroup label="Other"><option value="__constant__" ${selectedValue === '__constant__' ? 'selected' : ''}>Manual Value (#)</option></optgroup>` : ''}
   `;
 }
 
