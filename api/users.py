@@ -117,6 +117,8 @@ async def list_users(
     interacted_with_owner: Optional[bool] = Query(None),
     muted: Optional[bool] = Query(None),
     blocked: Optional[bool] = Query(None),
+    exclude_stubs: bool = Query(False),
+    exclude_unanalyzed: bool = Query(False),
     # Advanced / Graph filters
     filter_tree: Optional[str] = Query(None),
     min_flowrank: Optional[float] = Query(None),
@@ -159,6 +161,8 @@ async def list_users(
         search=search,
         flags=flags or None,
         filter_tree=filter_tree,
+        exclude_stubs=exclude_stubs,
+        exclude_unanalyzed=exclude_unanalyzed,
         min_flowrank=min_flowrank,
         min_in_degree=min_in_degree,
         min_days_inactive=min_days_inactive,

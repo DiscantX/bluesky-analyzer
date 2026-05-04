@@ -64,11 +64,20 @@ async def upsert_relationship(
 ) -> AccountRelationship:
     rel_data = {k: v for k, v in data.items() if k in RELATIONSHIP_FIELDS}
     rel_data["did"] = profile.did
-    rel, _ = await AccountRelationship.update_or_create(
-        defaults=rel_data,
-        owner=owner,
-        profile=profile,
-    )
+
+    existing = await AccountRelationship.get_or_none(owner=owner, profile=profile)
+    if existing:
+        # Promotion logic: Never demote a crawl tier (e.g. from Standard back to Stub)
+        new_tier = rel_data.get("crawl_tier")
+        if new_tier is not None:
+            rel_data["crawl_tier"] = max(existing.crawl_tier, new_tier)
+        
+        # Update existing record
+        existing.update_from_dict(rel_data)
+        await existing.save()
+        return existing
+
+    rel = await AccountRelationship.create(owner=owner, profile=profile, **rel_data)
     return rel
 
 

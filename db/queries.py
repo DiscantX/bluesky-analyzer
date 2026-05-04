@@ -96,6 +96,8 @@ def _where(
     max_followers: int | None = None,
     min_flowrank: float | None = None,
     min_in_degree: int | None = None,
+    exclude_stubs: bool = False,
+    exclude_unanalyzed: bool = False,
 ) -> tuple[str, list[Any]]:
     clauses = ["r.owner_id = ?"]
     params: list[Any] = [owner_id]
@@ -110,6 +112,11 @@ def _where(
             if column:
                 clauses.append(f"{column} = ?")
                 params.append(_bool_param(value) if isinstance(value, bool) else value)
+
+    if exclude_stubs:
+        clauses.append("r.crawl_tier > 0")
+    if exclude_unanalyzed:
+        clauses.append("p.last_analyzed_at IS NOT NULL")
 
     if min_days_inactive is not None:
         clauses.append("p.days_since_post >= ?")
@@ -149,6 +156,8 @@ async def query_users(
     max_followers: int | None = None,
     min_flowrank: float | None = None,
     min_in_degree: int | None = None,
+    exclude_stubs: bool = False,
+    exclude_unanalyzed: bool = False,
     sort_by: str = "handle",
     sort_dir: str = "asc",
     limit: int = 200,
@@ -166,6 +175,8 @@ async def query_users(
         max_followers=max_followers,
         min_flowrank=min_flowrank,
         min_in_degree=min_in_degree,
+        exclude_stubs=exclude_stubs,
+        exclude_unanalyzed=exclude_unanalyzed,
     )
     order_col = SORTABLE_FIELDS.get(sort_by, "p.handle")
     direction = "DESC" if sort_dir == "desc" else "ASC"

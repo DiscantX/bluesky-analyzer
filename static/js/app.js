@@ -29,6 +29,8 @@ const state = {
     they_follow_me: null,
     muted: null,
     blocked: null,
+    exclude_stubs: false,
+    exclude_unanalyzed: false,
     // numeric ranges
     min_days_inactive: null,
     min_repost_ratio: null,
@@ -137,6 +139,7 @@ function userRow(u) {
         <div class="user-name" title="${u.display_name}" style="min-width:0">${u.display_name || "—"}</div>
         <div class="user-handle" title="${u.handle}" style="min-width:0">@${u.handle}</div>
         <div class="col-stat">${fmt(u.followers_count)}</div>
+        <div class="col-stat">${fmt(u.follows_count)}</div>
         <div class="col-stat">${u.days_since_post != null ? u.days_since_post + "d" : "—"}</div>
         <div class="col-stat">${pct(u.repost_ratio)}</div>
         <div class="col-stat">${fmt(u.posts_count)}</div>
@@ -205,7 +208,7 @@ function sortByHeader(field) {
   } else {
     state.sort.by = field;
     // Default to DESC for numbers/dates, ASC for names
-    const descDefaults = ["followers_count", "days_since_post", "repost_ratio", "posts_count", "last_post_at", "last_analyzed_at", "flowrank_score", "community_id"];
+    const descDefaults = ["followers_count", "follows_count", "days_since_post", "repost_ratio", "posts_count", "last_post_at", "last_analyzed_at", "flowrank_score", "community_id"];
     state.sort.dir = descDefaults.includes(field) ? "desc" : "asc";
   }
   state.pagination.offset = 0;
@@ -260,6 +263,7 @@ function renderUsers() {
       ${renderHeader("Name", "display_name")}
       ${renderHeader("Handle", "handle")}
       ${renderHeader("Followers", "followers_count", true)}
+      ${renderHeader("Following", "follows_count", true)}
       ${renderHeader("Inactive", "days_since_post", true)}
       ${renderHeader("Repost %", "repost_ratio", true)}
       ${renderHeader("Posts", "posts_count", true)}
@@ -331,7 +335,8 @@ async function fetchUsers(append = false, silent = false) {
   // Boolean filters — only send when not null
   const boolFlags = [
     "i_follow_them","they_follow_me","is_inactive","is_repost_heavy",
-    "is_one_sided_follow","is_follower_only","interacted_with_owner","muted","blocked",
+    "is_one_sided_follow","is_follower_only","interacted_with_owner","muted","blocked", 
+    "exclude_stubs", "exclude_unanalyzed"
   ];
   for (const key of boolFlags) {
     if (state.filters[key] !== null && state.filters[key] !== undefined) {
@@ -435,6 +440,18 @@ function selectTab(tabId) {
   fetchUsers();
 }
 
+function onToggleExcludeStubs(enabled) {
+  state.filters.exclude_stubs = enabled;
+  state.pagination.offset = 0;
+  fetchUsers();
+}
+
+function onToggleExcludeUnanalyzed(enabled) {
+  state.filters.exclude_unanalyzed = enabled;
+  state.pagination.offset = 0;
+  fetchUsers();
+}
+
 // ── Account switching ─────────────────────────────────────────────────────────
 async function switchAccount(alias) {
   state.activeAlias = alias;
@@ -445,6 +462,10 @@ async function switchAccount(alias) {
   // Reset filters to "all follows" default
   for (const key of Object.keys(state.filters)) state.filters[key] = null;
   state.filters.i_follow_them = true;
+  state.filters.exclude_stubs = false;
+  state.filters.exclude_unanalyzed = false;
+  if (el("exclude-stubs-toggle")) el("exclude-stubs-toggle").checked = false;
+  if (el("exclude-unanalyzed-toggle")) el("exclude-unanalyzed-toggle").checked = false;
 
   renderAccountPills();
   renderNav();

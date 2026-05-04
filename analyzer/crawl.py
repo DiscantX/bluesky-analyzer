@@ -134,6 +134,10 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     # Cache tracked DIDs for local subgraph degree calculations
     tracked_dids = set(await AccountRelationship.filter(owner=owner).values_list("did", flat=True))
 
+    # Pre-fetch tiers to avoid redundant Tier 1 -> Tier 0 demotion attempts
+    owner_relationships = await AccountRelationship.filter(owner=owner).all()
+    rel_tier_by_did = {rel.did: rel.crawl_tier for rel in owner_relationships}
+
     async def process_candidate(item: CrawlQueueItem):
         async with CRAWL_SEMAPHORE:
             user = await AccountRelationship.filter(owner=owner, did=item.did).prefetch_related("profile").first()
@@ -195,20 +199,25 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     target_did = f["did"]
                     target_handle = f["handle"]
 
-                    # Create or update the stub for this owner
-                    profile, target_user = await upsert_profile_relationship(
-                        owner,
-                        {
-                            "did": target_did,
-                            "handle": target_handle,
-                            "display_name": f.get("displayName", ""),
-                            "avatar_url": f.get("avatar", ""),
-                            "profile_url": f"https://bsky.app/profile/{target_handle}",
-                            "discovered_via": "graph_crawl",
-                            "crawl_tier": 0,  # Discovered accounts start as stubs
-                            "crawl_pending_fields": json.dumps(["feed_sample", "relationship_flags"]),
-                        },
-                    )
+                    # Optimization: Only upsert if this is a new discovery or currently a stub.
+                    # If Tier 1+, we don't need to touch the relationship record.
+                    if target_did not in rel_tier_by_did or rel_tier_by_did[target_did] == 0:
+                        profile, target_user = await upsert_profile_relationship(
+                            owner,
+                            {
+                                "did": target_did,
+                                "handle": target_handle,
+                                "display_name": f.get("displayName", ""),
+                                "avatar_url": f.get("avatar", ""),
+                                "profile_url": f"https://bsky.app/profile/{target_handle}",
+                                "discovered_via": "graph_crawl",
+                                "crawl_tier": 0,
+                                "crawl_pending_fields": json.dumps(["feed_sample", "relationship_flags"]),
+                            },
+                        )
+                    else:
+                        target_user = await AccountRelationship.filter(owner=owner, did=target_did).first()
+
                     if target_user.first_seen_at and target_user.first_seen_at >= _now() - timedelta(seconds=5):
                         discovered_new += 1
 

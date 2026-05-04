@@ -111,6 +111,19 @@
           oninput="onSearch(this.value)"
         >
       </div>
+
+      <label class="toggle-wrap" title="Hide stub profiles (Discovery tier 0)" style="margin-left: 0.5rem;">
+        <input type="checkbox" id="exclude-stubs-toggle" onchange="onToggleExcludeStubs(this.checked)">
+        <span class="toggle-slider"></span>
+        <span style="font-size: 0.7rem; color: var(--muted); margin-left: 0.3rem; white-space: nowrap;">Hide Stubs</span>
+      </label>
+
+      <label class="toggle-wrap" title="Hide profiles that haven't been analyzed yet" style="margin-left: 0.5rem;">
+        <input type="checkbox" id="exclude-unanalyzed-toggle" onchange="onToggleExcludeUnanalyzed(this.checked)">
+        <span class="toggle-slider"></span>
+        <span style="font-size: 0.7rem; color: var(--muted); margin-left: 0.3rem; white-space: nowrap;">Hide Unanalyzed</span>
+      </label>
+
       <span class="result-count" id="result-count"></span>
     </div>
 

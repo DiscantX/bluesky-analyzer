@@ -327,11 +327,11 @@ body {
 .user-grid {
   display: grid;
   /* We use minmax(0, ...) to allow columns to shrink and fixed widths for stats to ensure alignment */
-  grid-template-columns: 44px minmax(120px, 1fr) minmax(120px, 1fr) 80px 80px 80px 80px 70px 60px 100px 100px;
+  grid-template-columns: 44px minmax(120px, 1fr) minmax(120px, 1fr) 80px 80px 80px 80px 80px 70px 60px 100px 100px;
   align-items: center;
   gap: 0.75rem;
   padding: 0.55rem 1rem;
-  min-width: 1100px; /* Ensures the table doesn't collapse into a vertical mess */
+  min-width: 1180px; /* Ensures the table doesn't collapse into a vertical mess */
 }
 
 .user-list-header {

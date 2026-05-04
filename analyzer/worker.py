@@ -7,7 +7,7 @@ from analyzer.client import BskyClient
 from analyzer.crawl import crawl_step, refresh_priorities
 from analyzer.manager import bus, is_operation_running, running_tasks, task_key
 from analyzer.sync import run_sync
-from db.models import CrawlRun, SavedAccount
+from db.models import CrawlRun, SavedAccount, AccountRelationship
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,21 @@ def schedule_crawl(account: SavedAccount) -> bool:
     return True
 
 
+async def needs_urgent_sync(account: SavedAccount) -> bool:
+    """
+    Returns True if there are Tier 1 (Standard) relationships 
+    that have never been analyzed.
+    """
+    count = await AccountRelationship.filter(
+        owner=account,
+        crawl_tier__gt=0,
+        profile__last_analyzed_at__isnull=True
+    ).count()
+    if count > 0:
+        logger.info(f"Account {account.alias} has {count} un-analyzed tracked profiles. Prioritizing sync.")
+    return count > 0
+
+
 async def worker_loop():
     """Periodically schedules sync and crawl work for all accounts."""
     logger.info("Background worker loop started.")
@@ -64,11 +79,15 @@ async def worker_loop():
 
             for account in accounts:
                 if account.auto_sync_enabled:
-                    if not account.last_synced_at or (now - account.last_synced_at) > SYNC_STALENESS:
+                    # Urgency check: stale sync OR un-analyzed standard profiles
+                    stale = not account.last_synced_at or (now - account.last_synced_at) > SYNC_STALENESS
+                    if stale or await needs_urgent_sync(account):
                         schedule_sync(account)
 
                 if account.auto_crawl_enabled and account.last_synced_at:
-                    schedule_crawl(account)
+                    # Only crawl if a sync isn't urgently needed or currently running
+                    if not is_operation_running(account.alias, "sync"):
+                        schedule_crawl(account)
 
         except Exception as e:
             logger.error(f"Worker loop encountered an error: {e}")

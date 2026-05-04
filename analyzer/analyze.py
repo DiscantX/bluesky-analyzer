@@ -172,6 +172,7 @@ def build_tracked_user_data(
         "posts_count": _get(profile, "posts_count", "postsCount"),
         "i_follow_them": i_follow_them,
         "they_follow_me": they_follow_me,
+        "crawl_tier": 1,
         # Feed stats
         "last_post_at": feed_stats["last_post_at"],
         "repost_count": feed_stats["repost_count"],

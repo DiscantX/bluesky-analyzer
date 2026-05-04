@@ -179,6 +179,31 @@ async def run_sync(
         for dp in detailed_profiles:
             profile_map[dp.did] = dp
 
+        # ── 2.5.1 Fast pass: Update relationship status and promote stubs ─────
+        # We do this before analysis so the UI reflects the new graph immediately.
+        await emit("phase", message="Updating relationship status…")
+        
+        BATCH_SIZE = 50
+        for i in range(0, len(all_dids), BATCH_SIZE):
+            batch = all_dids[i : i + BATCH_SIZE]
+            tasks = []
+            for did in batch:
+                p = profile_map[did]
+                i_follow = did in follows_dids
+                they_follow = did in followers_dids
+                tasks.append(upsert_profile_relationship(saved_account, {
+                    "did": did,
+                    "handle": p.handle,
+                    "i_follow_them": i_follow,
+                    "they_follow_me": they_follow,
+                    "crawl_tier": 1,  # Promote from stub to standard
+                    "is_one_sided_follow": i_follow and not they_follow,
+                    "is_follower_only": they_follow and not i_follow,
+                }))
+            await asyncio.gather(*tasks)
+            if i % 250 == 0:
+                await emit("phase", message=f"Updating relationships ({i}/{total})…")
+
         # ── 2.6 Filter stale accounts to avoid wasteful re-analysis ───────────
         # Skip accounts that were analyzed recently (within their tier's threshold)
         dids_to_analyze, dids_to_skip = await _filter_stale_accounts(saved_account, all_dids)
