@@ -166,19 +166,35 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
 
             async def process_page(batch):
                 nonlocal discovered_new
-                page_dids = []
+                page_dids = [f["did"] for f in batch]
+                
+                # OPTIMIZATION: Load all edges for all discovered accounts in ONE query
+                # instead of querying individually per account (N+1 prevention).
+                all_edges = await FollowEdge.filter(followee_did__in=page_dids).all()
+                edges_by_target = {}
+                for edge in all_edges:
+                    if edge.followee_did not in edges_by_target:
+                        edges_by_target[edge.followee_did] = set()
+                    edges_by_target[edge.followee_did].add(edge.follower_did)
+                
+                # OPTIMIZATION: Batch-create missing edges instead of get_or_create per account
+                existing_edges = set(
+                    (edge.follower_did, edge.followee_did)
+                    for edge in all_edges
+                )
+                new_edges = [
+                    FollowEdge(follower_did=user.did, followee_did=target_did)
+                    for target_did in page_dids
+                    if (user.did, target_did) not in existing_edges
+                ]
+                if new_edges:
+                    await FollowEdge.bulk_create(new_edges, ignore_conflicts=True)
+                
                 for f in batch:
                     target_did = f["did"]
                     target_handle = f["handle"]
-                    page_dids.append(target_did)
 
-                    # 2. Record the edge globally
-                    await FollowEdge.get_or_create(
-                        follower_did=user.did,
-                        followee_did=target_did
-                    )
-
-                    # 3. Create or update the stub for this owner
+                    # Create or update the stub for this owner
                     profile, target_user = await upsert_profile_relationship(
                         owner,
                         {
@@ -188,17 +204,16 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                             "avatar_url": f.get("avatar", ""),
                             "profile_url": f"https://bsky.app/profile/{target_handle}",
                             "discovered_via": "graph_crawl",
-                            "crawl_tier": 0, # Discovered accounts start as stubs
+                            "crawl_tier": 0,  # Discovered accounts start as stubs
                             "crawl_pending_fields": json.dumps(["feed_sample", "relationship_flags"]),
                         },
                     )
                     if target_user.first_seen_at and target_user.first_seen_at >= _now() - timedelta(seconds=5):
                         discovered_new += 1
 
-                    # 4. Update metrics for the target
-                    # Calculate local degree: how many of our tracked users follow this person
-                    target_followers = await FollowEdge.filter(followee_did=target_did).values_list("follower_did", flat=True)
-                    target_user.in_subgraph_degree = len(set(target_followers).intersection(tracked_dids))
+                    # Update metrics for the target using pre-loaded edge data (O(1) lookup)
+                    target_followers = edges_by_target.get(target_did, set())
+                    target_user.in_subgraph_degree = len(target_followers.intersection(tracked_dids))
                     
                     target_user.crawl_priority = await calculate_priority(target_user)
                     await target_user.save()
