@@ -30,6 +30,7 @@ from api.accounts import router as accounts_router
 from api.sync import router as sync_router
 from api.users import router as users_router
 from api.filters import router as filters_router
+from api.settings import router as settings_router
 import analyzer.worker as worker_module
 from analyzer.manager import running_tasks
 
@@ -97,11 +98,14 @@ async def lifespan(app: FastAPI):
         ensure_sqlite_compat_columns()
         logger.info(f"Database ready at {DB_PATH}")
 
+        # Initialize default settings
+        from db.models import GlobalSettings, SavedAccount
+        await GlobalSettings.get_or_create(id=1)
+
         # Sync accounts.json -> DB on every startup so manually edited
         # accounts files are picked up automatically.
         try:
             import config as cfg
-            from db.models import SavedAccount
             for acc in cfg.list_saved_accounts():
                 await SavedAccount.update_or_create(
                     defaults={"handle": acc["handle"]},
@@ -160,6 +164,7 @@ app.include_router(accounts_router)
 app.include_router(sync_router)
 app.include_router(users_router)
 app.include_router(filters_router)
+app.include_router(settings_router)
 
 # ── Client logging ────────────────────────────────────────────────────────────
 @app.post("/api/client-log")

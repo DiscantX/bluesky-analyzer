@@ -7,6 +7,21 @@ from tortoise import fields
 from tortoise.models import Model
 
 
+class GlobalSettings(Model):
+    """App-wide configuration settings."""
+    id = fields.IntField(pk=True)
+    inactivity_threshold_days = fields.IntField(default=90)
+    repost_ratio_threshold = fields.FloatField(default=0.70)
+    feed_sample_size = fields.IntField(default=100)
+    sync_staleness_hours = fields.IntField(default=12)
+    worker_sweep_interval_seconds = fields.IntField(default=300)
+    crawl_concurrency = fields.IntField(default=3)
+    min_connection_threshold = fields.IntField(default=3)
+    crawl_budget_mb = fields.IntField(default=1024)
+
+    class Meta:
+        table = "global_settings"
+
 class SavedAccount(Model):
     """A Bluesky account the user has configured in this app."""
 

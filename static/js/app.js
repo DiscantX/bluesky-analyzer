@@ -13,6 +13,7 @@ const state = {
   syncStream: null,
   crawlStream: null,
   statusTimer: null,
+  settings: {},
 
   // Filter / sort state — any new filter just gets added here
   filters: {
@@ -631,6 +632,49 @@ async function submitAddAccount() {
     if (!state.activeAlias) switchAccount(alias);
   } catch (e) {
     logError("submitAddAccount failed:", e);
+    toast(e.message, "error");
+  }
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+async function openSettings() {
+  try {
+    state.settings = await api("/api/settings/");
+    el("set-inactivity").value = state.settings.inactivity_threshold_days;
+    el("set-repost").value     = state.settings.repost_ratio_threshold;
+    el("set-sample").value     = state.settings.feed_sample_size;
+    el("set-staleness").value  = state.settings.sync_staleness_hours;
+    el("set-sweep").value      = state.settings.worker_sweep_interval_seconds;
+    el("set-min-conn").value   = state.settings.min_connection_threshold;
+    el("set-crawl-conc").value = state.settings.crawl_concurrency;
+    el("set-budget").value     = state.settings.crawl_budget_mb;
+
+    el("settings-modal").classList.add("open");
+  } catch (e) {
+    toast("Failed to load settings", "error");
+  }
+}
+
+function closeSettings() {
+  el("settings-modal").classList.remove("open");
+}
+
+async function submitSettings() {
+  const payload = {
+    inactivity_threshold_days:     parseInt(el("set-inactivity").value),
+    repost_ratio_threshold:        parseFloat(el("set-repost").value),
+    feed_sample_size:              parseInt(el("set-sample").value),
+    sync_staleness_hours:          parseInt(el("set-staleness").value),
+    worker_sweep_interval_seconds: parseInt(el("set-sweep").value),
+    min_connection_threshold:      parseInt(el("set-min-conn").value),
+    crawl_concurrency:             parseInt(el("set-crawl-conc").value),
+    crawl_budget_mb:               parseInt(el("set-budget").value),
+  };
+  try {
+    await api("/api/settings/", { method: "PATCH", body: JSON.stringify(payload) });
+    toast("Settings saved (restart may be required for some values)");
+    closeSettings();
+  } catch (e) {
     toast(e.message, "error");
   }
 }

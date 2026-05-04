@@ -9,7 +9,7 @@ import asyncio
 import json
 from datetime import datetime, timezone, timedelta
 from tortoise.expressions import Q
-from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem
+from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem, GlobalSettings
 from db.profile_store import upsert_profile_relationship
 from analyzer.fetch import public_fetch_graph, public_fetch_profiles
 from analyzer.metrics import run_graph_analysis
@@ -90,6 +90,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     3. Save new edges and create stubs.
     4. Update priorities for affected accounts.
     """
+    settings = await GlobalSettings.get(id=1)
     await CrawlRun.filter(account=owner, status="running", finished_at__isnull=True).update(
         status="paused",
         last_message="Interrupted while server was offline.",
@@ -146,7 +147,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 return
 
             # Enforcement of connection threshold for stubs
-            if user.crawl_tier == 0 and user.in_subgraph_degree < MIN_CONNECTION_THRESHOLD:
+            if user.crawl_tier == 0 and user.in_subgraph_degree < settings.min_connection_threshold:
                 if not (user.i_follow_them or user.they_follow_me):
                     skipped_profile = await user.profile
                     logger.debug(f"Skipping @{skipped_profile.handle} expansion (degree {user.in_subgraph_degree} < threshold)")

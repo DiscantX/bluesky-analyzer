@@ -17,7 +17,7 @@ from typing import AsyncGenerator
 from analyzer.client import BskyClient
 from analyzer.fetch import fetch_all_follows, fetch_all_followers, fetch_feeds_concurrent, fetch_profiles_detailed
 from analyzer.analyze import build_tracked_user_data
-from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge, Profile
+from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge, Profile, GlobalSettings
 from db.profile_store import upsert_profile_relationship
 from analyzer.manager import bus
 from analyzer.metrics import run_graph_analysis
@@ -120,6 +120,7 @@ async def run_sync(
     client: BskyClient,
     alias: str,
 ) -> None:
+    settings = await GlobalSettings.get(id=1)
     """
     Perform a full sync. Progress events are pushed to the broadcast bus
     so the SSE endpoint can stream them to the browser.
@@ -203,7 +204,7 @@ async def run_sync(
         async for did, feed_items in fetch_feeds_concurrent(
             client,
             dids_to_analyze,
-            limit_per_actor=FEED_SAMPLE_SIZE,
+            limit_per_actor=settings.feed_sample_size,
         ):
             completed += 1
             profile = profile_map[did]
@@ -214,8 +215,8 @@ async def run_sync(
                 owner_did=owner_did,
                 i_follow_them=did in follows_dids,
                 they_follow_me=did in followers_dids,
-                inactive_days=INACTIVE_DAYS,
-                repost_threshold=REPOST_THRESHOLD,
+                inactive_days=settings.inactivity_threshold_days,
+                repost_threshold=settings.repost_ratio_threshold,
             )
             data["last_analyzed_at"] = datetime.now(timezone.utc)
 

@@ -27,6 +27,12 @@
 
   <button class="btn btn-ghost" id="crawl-btn" onclick="startCrawl()" style="color:var(--accent2);border-color:rgba(167,139,250,0.3)">✨ Crawl</button>
   <button class="btn btn-primary" id="sync-btn" onclick="startSync()">↺ Sync</button>
+
+  <button class="btn btn-ghost" onclick="openSettings()" style="padding: 0.35rem 0.5rem; margin-left: 0.5rem;" title="Settings">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
+    </svg>
+  </button>
 </header>
 
 <!-- ── Sync progress bar ──────────────────────────────────────────────────── -->
@@ -145,6 +151,58 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeAddAccount()">Cancel</button>
       <button class="btn btn-primary" onclick="submitAddAccount()">Save Account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Settings Modal ──────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)closeSettings()">
+  <div class="modal" style="max-width: 500px;">
+    <div class="modal-title">Global Settings</div>
+    
+    <div class="settings-grid">
+      <div class="sidebar-label">Analysis</div>
+      <div class="field">
+        <label>Inactivity Threshold (days)</label>
+        <input id="set-inactivity" type="number" min="1" max="365">
+      </div>
+      <div class="field">
+        <label>Repost Ratio Threshold (0.0-1.0)</label>
+        <input id="set-repost" type="number" step="0.05" min="0" max="1">
+      </div>
+      <div class="field">
+        <label>Feed Sample Size (posts)</label>
+        <input id="set-sample" type="number" min="10" max="100">
+      </div>
+
+      <div class="sidebar-label">Sync & Background</div>
+      <div class="field">
+        <label>Sync Staleness (hours)</label>
+        <input id="set-staleness" type="number" min="1" max="168">
+      </div>
+      <div class="field">
+        <label>Worker Sweep Interval (seconds)</label>
+        <input id="set-sweep" type="number" min="30" max="3600">
+      </div>
+
+      <div class="sidebar-label">Network Discovery</div>
+      <div class="field">
+        <label>Min Connection Threshold</label>
+        <input id="set-min-conn" type="number" min="1" max="20">
+      </div>
+      <div class="field">
+        <label>Crawl Concurrency</label>
+        <input id="set-crawl-conc" type="number" min="1" max="10">
+      </div>
+      <div class="field">
+        <label>Crawl Budget (MB)</label>
+        <input id="set-budget" type="number" min="100" max="10240">
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitSettings()">Save Settings</button>
     </div>
   </div>
 </div>
