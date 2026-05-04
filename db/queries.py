@@ -166,12 +166,52 @@ def _build_recursive_where_clause(condition_tree: dict, params: list[Any]) -> st
         cond_op = cond.get("op")
         value = cond.get("value")
 
-        column = FILTERABLE_FIELDS_MAP.get(field)
-        if not column:
-            continue
+        # Mathematical Expression Logic (A op B op C ...)
+        left_field = cond.get("left_field") or cond.get("numerator")
+        extra_terms = cond.get("extra_terms")
+
+        # Legacy support for A op B structure
+        if left_field and extra_terms is None:
+            math_op = cond.get("math_op") or ("div" if cond.get("denominator") else None)
+            right_field = cond.get("right_field") or cond.get("denominator")
+            if math_op and right_field:
+                extra_terms = [{"op": math_op, "field": right_field}]
+
+        is_math_expr = left_field and extra_terms
+        if is_math_expr:
+            col_left = FILTERABLE_FIELDS_MAP.get(left_field)
+            if not col_left:
+                continue
+
+            expr_sql = col_left
+            valid_expr = True
+            for term in extra_terms:
+                t_op = term.get("op")
+                t_field = term.get("field")
+                col_right = FILTERABLE_FIELDS_MAP.get(t_field)
+                if not col_right:
+                    valid_expr = False
+                    break
+                if t_op == "add": expr_sql = f"({expr_sql} + {col_right})"
+                elif t_op == "sub": expr_sql = f"({expr_sql} - {col_right})"
+                elif t_op == "mul": expr_sql = f"({expr_sql} * {col_right})"
+                elif t_op == "div": expr_sql = f"(1.0 * {expr_sql} / NULLIF({col_right}, 0))"
+                elif t_op == "mod": expr_sql = f"({expr_sql} % NULLIF({col_right}, 0))"
+                elif t_op == "pow": expr_sql = f"POWER({expr_sql}, {col_right})"
+                else:
+                    valid_expr = False
+                    break
+            if valid_expr:
+                column = expr_sql
+            else:
+                continue
+        else:
+            column = FILTERABLE_FIELDS_MAP.get(field)
+            if not column:
+                continue
 
         # Coerce values for known boolean fields (FILTERABLE_FLAGS contains the bool keys)
-        if field in FILTERABLE_FLAGS:
+        if not is_math_expr and field in FILTERABLE_FLAGS:
             if isinstance(value, str):
                 value = value.lower() == "true"
             value = bool(value)

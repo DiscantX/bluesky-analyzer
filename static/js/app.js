@@ -114,11 +114,17 @@ const FILTER_FIELDS = {
   "community_id": { label: "Community ID", type: "number" },
   "handle": { label: "Handle", type: "string" },
   "display_name": { label: "Name", type: "string" },
+  "__math__": { label: "Math Expression (A op B)...", type: "math" },
 };
 
 const OPERATORS_BY_TYPE = {
   "boolean": [{ val: "eq", label: "is" }],
   "number": [
+    { val: "eq", label: "=" }, { val: "neq", label: "≠" },
+    { val: "gt", label: ">" }, { val: "gte", label: "≥" },
+    { val: "lt", label: "<" }, { val: "lte", label: "≤" }
+  ],
+  "math": [
     { val: "eq", label: "=" }, { val: "neq", label: "≠" },
     { val: "gt", label: ">" }, { val: "gte", label: "≥" },
     { val: "lt", label: "<" }, { val: "lte", label: "≤" }
@@ -129,9 +135,19 @@ const OPERATORS_BY_TYPE = {
   ]
 };
 
+const MATH_OPS = [
+  { val: "add", label: "+" },
+  { val: "sub", label: "-" },
+  { val: "mul", label: "×" },
+  { val: "div", label: "/" },
+  { val: "mod", label: "%" },
+  { val: "pow", label: "^" },
+];
+
 let builderState = {
   name: "",
   icon: "🔍",
+  id: null, // New: to track if we're editing an existing filter
   color: "#3b82f6",
   tree: { id: "root", op: "AND", conditions: [] }
 };
@@ -272,8 +288,10 @@ function renderCustomFilters() {
     <div class="nav-item ${state.activeTab === 'custom-' + f.id ? 'active' : ''}" 
          onclick="selectCustomFilter(${f.id})">
       <span style="color:${f.color}">${f.icon || '🔍'}</span>
-      <span>${f.name}</span>
-      <button class="btn-mini btn-ghost" onclick="deleteFilterSet(event, ${f.id})" style="margin-left:auto; border:none; opacity:0.4">×</button>
+      <span style="flex:1;">${f.name}</span>
+      <button class="btn-mini btn-ghost" onclick="editFilterSet(event, ${f.id})" style="margin-left:auto; border:none; opacity:0.4">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+      </button>
     </div>
   `).join("");
 }
@@ -908,13 +926,26 @@ function toast(message, type = "info") {
 }
 
 // ── Filter Builder Logic ──────────────────────────────────────────────────────
-function openFilterBuilder() {
-  builderState = { name: "", icon: "🔍", color: "#3b82f6", tree: { id: "root", op: "AND", conditions: [] } };
-  el("filter-name").value = "";
-  el("filter-icon").value = "🔍";
-  el("filter-color").value = "#3b82f6";
+function openFilterBuilder(isEdit = false) {
+  // Reset builderState for a new filter, or populate if editing
+  if (!isEdit) {
+    builderState = { name: "", icon: "🔍", color: "#3b82f6", id: null, tree: { id: "root", op: "AND", conditions: [] } };
+  }
+
+  el("filter-delete-btn").style.display = builderState.id ? "inline-flex" : "none";
+  el("filter-name").value = builderState.name;
+  el("filter-icon").value = builderState.icon;
+  el("filter-color").value = builderState.color;
   renderBuilder();
   el("filter-modal").classList.add("open");
+}
+
+function editFilterSet(e, id) {
+  e.stopPropagation(); // Prevent triggering selectCustomFilter
+  const f = state.customFilters.find(x => x.id === id);
+  if (!f) return;
+  builderState = { name: f.name, icon: f.icon, color: f.color, id: f.id, tree: typeof f.condition_tree === 'string' ? JSON.parse(f.condition_tree) : f.condition_tree };
+  openFilterBuilder(true);
 }
 
 function closeFilterBuilder() { el("filter-modal").classList.remove("open"); }
@@ -945,6 +976,50 @@ function renderGroup(group) {
 function renderRule(rule, groupId) {
   const fieldDef = FILTER_FIELDS[rule.field] || { type: "string" };
   const ops = OPERATORS_BY_TYPE[fieldDef.type] || [];
+
+  if (fieldDef.type === 'math') {
+    const subFields = Object.entries(FILTER_FIELDS).filter(([k, v]) => v.type === "number");
+    const leftOpts = subFields.map(([k, v]) => `<option value="${k}" ${rule.left_field === k ? 'selected' : ''}>${v.label}</option>`).join("");
+
+    // Backward compatibility for legacy A op B structure
+    if (!rule.extra_terms) {
+      rule.extra_terms = [{ op: rule.math_op || "div", field: rule.right_field || "follows_count" }];
+    }
+
+    const termsHtml = rule.extra_terms.map((term, idx) => {
+      const mathOpts = MATH_OPS.map(o => `<option value="${o.val}" ${term.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("");
+      const fieldOpts = subFields.map(([k, v]) => `<option value="${k}" ${term.field === k ? 'selected' : ''}>${v.label}</option>`).join("");
+      return `
+        <select class="rule-field" style="width:40px; font-weight:bold" onchange="updateMathTerm('${rule.id}', ${idx}, 'op', this.value)">
+          ${mathOpts}
+        </select>
+        <select class="rule-field" style="width:110px" onchange="updateMathTerm('${rule.id}', ${idx}, 'field', this.value)">
+          ${fieldOpts}
+        </select>
+        ${rule.extra_terms.length > 1 ? `<button class="btn btn-ghost btn-mini" onclick="removeMathTerm('${rule.id}', ${idx})">×</button>` : ''}
+      `;
+    }).join("");
+
+    return `
+      <div class="builder-rule" data-id="${rule.id}" style="flex-wrap: wrap;">
+        <select class="rule-field" onchange="updateRule('${rule.id}', 'field', this.value)">
+          ${Object.entries(FILTER_FIELDS).map(([k,v]) => `<option value="${k}" ${rule.field === k ? 'selected' : ''}>${v.label}</option>`).join("")}
+        </select>
+        <select class="rule-field" style="width:110px" onchange="updateRule('${rule.id}', 'left_field', this.value)">
+          ${leftOpts}
+        </select>
+        ${termsHtml}
+        <button class="btn btn-ghost btn-mini" onclick="addMathTerm('${rule.id}')" title="Add term">+</button>
+        <select class="rule-op" onchange="updateRule('${rule.id}', 'op', this.value)">
+          ${ops.map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
+        </select>
+        <input class="rule-value" type="number" step="0.01" 
+               value="${rule.value || ''}"
+               oninput="updateRule('${rule.id}', 'value', Number(this.value))">
+        <button class="btn btn-ghost btn-mini" onclick="removeNode('${rule.id}')">×</button>
+      </div>`;
+  }
+
   return `
     <div class="builder-rule" data-id="${rule.id}">
       <select class="rule-field" onchange="updateRule('${rule.id}', 'field', this.value)">
@@ -972,6 +1047,30 @@ function findNode(tree, id) {
     if (c.conditions) { let found = findNode(c, id); if (found) return found; }
   }
   return null;
+}
+
+function addMathTerm(id) {
+  const node = findNode(builderState.tree, id);
+  if (!node.extra_terms) {
+    node.extra_terms = [{ op: node.math_op || "div", field: node.right_field || "follows_count" }];
+  }
+  node.extra_terms.push({ op: "add", field: "posts_count" });
+  renderBuilder();
+}
+
+function removeMathTerm(id, idx) {
+  const node = findNode(builderState.tree, id);
+  if (node.extra_terms && node.extra_terms.length > 1) {
+    node.extra_terms.splice(idx, 1);
+    renderBuilder();
+  }
+}
+
+function updateMathTerm(id, idx, key, val) {
+  const node = findNode(builderState.tree, id);
+  if (node.extra_terms && node.extra_terms[idx]) {
+    node.extra_terms[idx][key] = val;
+  }
 }
 
 function addRule(groupId) {
@@ -1004,6 +1103,12 @@ function updateRule(id, key, val) {
     // Initialize value with type-appropriate defaults
     if (fieldDef.type === 'boolean') node.value = true;
     else if (fieldDef.type === 'number') node.value = 0;
+    else if (fieldDef.type === 'math') {
+      node.left_field = "followers_count";
+      node.extra_terms = [{ op: "div", field: "follows_count" }];
+      node.op = "lt";
+      node.value = 0.5;
+    }
     else node.value = '';
 
     renderBuilder();
@@ -1019,7 +1124,14 @@ async function saveFilterSet() {
     name, icon: el("filter-icon").value, color: el("filter-color").value,
     condition_tree: JSON.stringify(builderState.tree)
   };
-  await api(`/api/filters/${state.activeAlias}`, { method: "POST", body: JSON.stringify(payload) });
+
+  if (builderState.id) {
+    await api(`/api/filters/${state.activeAlias}/${builderState.id}`, { method: "PUT", body: JSON.stringify(payload) });
+    toast("Filter updated!");
+  } else {
+    await api(`/api/filters/${state.activeAlias}`, { method: "POST", body: JSON.stringify(payload) });
+    toast("Filter saved!");
+  }
   closeFilterBuilder();
   await loadFilterSets();
 }
@@ -1030,11 +1142,17 @@ async function loadFilterSets() {
   renderCustomFilters();
 }
 
-async function deleteFilterSet(e, id) {
-  e.stopPropagation();
+async function handleDeleteInBuilder() {
+  if (!builderState.id) return;
   if (!confirm("Delete this filter?")) return;
-  await api(`/api/filters/${state.activeAlias}/${id}`, { method: "DELETE" });
-  await loadFilterSets();
+  try {
+    await api(`/api/filters/${state.activeAlias}/${builderState.id}`, { method: "DELETE" });
+    closeFilterBuilder();
+    await loadFilterSets();
+  } catch (e) {
+    logError("Delete filter failed:", e);
+    toast(e.message, "error");
+  }
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
