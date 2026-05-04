@@ -680,3 +680,135 @@ body {
     -webkit-overflow-scrolling: touch;
   }
 }
+/* ─────────────────────────────────────────────────────────────────────────────
+   VARIABLE CHIP — collapsed variable rule in the filter builder
+───────────────────────────────────────────────────────────────────────────── */
+.builder-rule--variable {
+  align-items: center;
+}
+
+.var-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  background: linear-gradient(135deg, rgba(167,139,250,0.15), rgba(91,140,248,0.12));
+  border: 1px solid rgba(167,139,250,0.4);
+  border-radius: 999px;
+  overflow: hidden;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.var-chip-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 100%;
+  font-size: 0.8rem;
+  font-style: italic;
+  font-weight: 700;
+  color: var(--accent2);
+  background: rgba(167,139,250,0.2);
+  border-right: 1px solid rgba(167,139,250,0.3);
+  flex-shrink: 0;
+  font-family: var(--mono);
+  cursor: default;
+}
+
+.var-chip-select {
+  /* Explicit dark background so OS dropdown popup inherits the theme, not system white */
+  background-color: #1a1d29; /* --surface2 */
+  border: none;
+  color: var(--accent2);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0 0.5rem;
+  outline: none;
+  cursor: pointer;
+  height: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  /* Custom dropdown arrow in accent color */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a78bfa' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  padding-right: 20px;
+}
+
+.var-chip-select:hover {
+  color: #d4b8fe;
+  background-color: #1e2130;
+}
+
+/* Style the optgroup labels and options inside the chip dropdown */
+.var-chip-select optgroup {
+  background-color: #13161f; /* --surface */
+  color: #6b7280; /* --muted */
+  font-style: normal;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.var-chip-select option {
+  background-color: #1a1d29; /* --surface2 */
+  color: #e8eaf0; /* --text */
+  font-family: monospace;
+  font-size: 0.8rem;
+  padding: 2px 4px;
+}
+
+.var-chip-edit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  border-left: 1px solid rgba(167,139,250,0.3);
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+  padding: 0;
+}
+
+.var-chip-edit:hover {
+  color: var(--accent2);
+  background: rgba(167,139,250,0.15);
+}
+
+/* ── Builder rule expand/collapse animation ── */
+.builder-rule--math {
+  /* Expandable math rows get a subtle left accent */
+  border-left: 2px solid rgba(91,140,248,0.3) !important;
+}
+
+.builder-rule--animate-in {
+  animation: ruleSlideIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes ruleSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scaleY(0.92);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+    max-height: 200px;
+  }
+}
+
+/* Math editor expanded state — slightly highlighted background */
+.builder-rule--expanded {
+  background: rgba(91,140,248,0.04);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem !important;
+  margin-bottom: 0.5rem;
+  border: 1px solid rgba(91,140,248,0.15) !important;
+}

@@ -103,18 +103,45 @@ const SORT_OPTIONS = [
   { value: "first_seen_at",   label: "First Seen" },
 ];
 
+// Raw fields are built-in DB columns — not user-editable expressions.
+// User-defined variables get { type: "variable", editable: true } added by updateFilterFieldsWithVariables().
 const BASE_FILTER_FIELDS = {
-  "i_follow_them": { label: "I Follow Them", type: "boolean" },
-  "they_follow_me": { label: "They Follow Me", type: "boolean" },
-  "is_inactive": { label: "Inactive", type: "boolean" },
-  "is_repost_heavy": { label: "Repost Heavy", type: "boolean" },
-  "followers_count": { label: "Followers", type: "number" },
-  "days_since_post": { label: "Days Inactive", type: "number" },
-  "repost_ratio": { label: "Repost Ratio", type: "number" },
-  "flowrank_score": { label: "FlowRank", type: "number" },
-  "community_id": { label: "Community ID", type: "number" },
-  "handle": { label: "Handle", type: "string" },
-  "display_name": { label: "Name", type: "string" },
+  // ── Relationship booleans ──
+  "i_follow_them":        { label: "I Follow Them",      type: "boolean", group: "Relationship" },
+  "they_follow_me":       { label: "They Follow Me",     type: "boolean", group: "Relationship" },
+  "interacted_with_owner":{ label: "Has Interacted",     type: "boolean", group: "Relationship" },
+  "is_one_sided_follow":  { label: "One-Sided Follow",   type: "boolean", group: "Relationship" },
+  "is_follower_only":     { label: "Follower Only",      type: "boolean", group: "Relationship" },
+  "muted":                { label: "Muted",              type: "boolean", group: "Relationship" },
+  "blocked":              { label: "Blocked",            type: "boolean", group: "Relationship" },
+  "__member__":           { label: "Member of Filter...", type: "member",  group: "Relationship" },
+
+  // ── Activity booleans (server-computed flags) ──
+  "is_inactive":          { label: "Is Inactive",        type: "boolean", group: "Activity" },
+  "is_repost_heavy":      { label: "Is Repost Heavy",    type: "boolean", group: "Activity" },
+
+  // ── Profile counts (raw numbers) ──
+  "followers_count":      { label: "Followers",          type: "number",  group: "Profile" },
+  "follows_count":        { label: "Follows",            type: "number",  group: "Profile" },
+  "posts_count":          { label: "Total Posts",        type: "number",  group: "Profile" },
+
+  // ── Activity numbers ──
+  "days_since_post":      { label: "Days Since Post",    type: "number",  group: "Activity" },
+  "repost_ratio":         { label: "Repost Ratio",       type: "number",  group: "Activity" },
+  "sampled_post_count":   { label: "Sampled Posts",      type: "number",  group: "Activity" },
+  "repost_count":         { label: "Repost Count",       type: "number",  group: "Activity" },
+  "original_post_count":  { label: "Original Posts",     type: "number",  group: "Activity" },
+
+  // ── Graph / network metrics ──
+  "flowrank_score":       { label: "FlowRank",           type: "number",  group: "Network" },
+  "in_subgraph_degree":   { label: "In-Subgraph Degree", type: "number",  group: "Network" },
+  "clustering_coefficient":{ label: "Clustering Coeff.", type: "number",  group: "Network" },
+  "crawl_priority":       { label: "Crawl Priority",     type: "number",  group: "Network" },
+  "community_id":         { label: "Community ID",       type: "number",  group: "Network" },
+
+  // ── String fields ──
+  "handle":               { label: "Handle",             type: "string",  group: "Profile" },
+  "display_name":         { label: "Name",               type: "string",  group: "Profile" },
 };
 
 let FILTER_FIELDS = { ...BASE_FILTER_FIELDS };
@@ -509,6 +536,7 @@ async function fetchUsers(append = false, silent = false) {
 async function refresh() {
   await fetchStats();
   await loadFilterSets();
+  await loadVariables();
   await fetchUsers(false, true);
 }
 
@@ -988,13 +1016,14 @@ function renderGroup(group) {
 function renderRule(rule, groupId) {
   const fieldDef = FILTER_FIELDS[rule.field] || { type: "string" };
   const ops = OPERATORS_BY_TYPE[fieldDef.type] || [];
-   // ── Member of Filter Logic ──
+
+  // ── Member of Filter Logic ──
   if (fieldDef.type === 'member') {
     const filterOpts = state.customFilters.map(f => `<option value="${f.id}" ${rule.value == f.id ? 'selected' : ''}>${f.icon} ${f.name}</option>`).join("");
     return `
       <div class="builder-rule" data-id="${rule.id}">
         <select class="rule-field" onchange="updateRule('${rule.id}', 'field', this.value)">
-          ${Object.entries(FILTER_FIELDS).map(([k,v]) => `<option value="${k}" ${rule.field === k ? 'selected' : ''}>${v.label}</option>`).join("")}
+          ${renderFieldOptions(rule.field)}
         </select>
         <select class="rule-value" onchange="updateRule('${rule.id}', 'value', Number(this.value))" style="flex:1">
           <option value="">Select a Filter...</option>
@@ -1005,14 +1034,26 @@ function renderRule(rule, groupId) {
   }
 
   // ── Variable (Saved Expression) Logic ──
+  // Shows as a collapsed chip. Dropdown includes all raw fields + user variables.
+  // Pencil only appears for user-defined (editable) variables.
   if (fieldDef.type === 'variable') {
-    const variable = state.variables.find(v => v.name === rule.field);
+    const isEditable = !!fieldDef.editable;
+
+    const pencilBtn = isEditable
+      ? `<button class="var-chip-edit" onclick="inlineEditVariable('${rule.id}')" title="Edit expression">
+           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+         </button>`
+      : ``;
+
     return `
-      <div class="builder-rule" data-id="${rule.id}">
-        <div style="display: inline-block; background: var(--accent2); color: white; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.85rem;">
-          ${rule.field}
+      <div class="builder-rule builder-rule--variable" data-id="${rule.id}">
+        <div class="var-chip">
+          <span class="var-chip-icon">${isEditable ? 'ƒ' : '#'}</span>
+          <select class="var-chip-select" onchange="updateRule('${rule.id}', 'field', this.value)">
+            ${renderFieldOptions(rule.field, true)}
+          </select>
+          ${pencilBtn}
         </div>
-        <button class="btn btn-ghost btn-mini" onclick="openVariableEditor(${variable?.id || 'null'}, '${rule.id}')" title="Edit expression">✏️</button>
         <select class="rule-op" onchange="updateRule('${rule.id}', 'op', this.value)">
           ${ops.map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
         </select>
@@ -1024,16 +1065,13 @@ function renderRule(rule, groupId) {
 
   // ── Math Expression Logic ──
   if (fieldDef.type === 'math' || rule.field === '__math__') {
-    const subFields = Object.entries(FILTER_FIELDS).filter(([k, v]) => v.type === "number" || v.type === "variable");
-    const leftOpts = subFields.map(([k, v]) => `<option value="${k}" ${rule.left_field === k ? 'selected' : ''}>${v.label}</option>`).join("");
-
     if (!rule.extra_terms) {
       rule.extra_terms = [{ op: "div", field: "follows_count" }];
     }
 
     const termsHtml = rule.extra_terms.map((term, idx) => {
       const mathOpts = MATH_OPS.map(o => `<option value="${o.val}" ${term.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("");
-      const fieldOpts = subFields.map(([k, v]) => `<option value="${k}" ${term.field === k ? 'selected' : ''}>${v.label}</option>`).join("");
+      const fieldOpts = renderFieldOptions(term.field, true);
       return `
         <select class="rule-field" style="width:40px; font-weight:bold" onchange="updateMathTerm('${rule.id}', ${idx}, 'op', this.value)">
           ${mathOpts}
@@ -1045,11 +1083,18 @@ function renderRule(rule, groupId) {
       `;
     }).join("");
 
+    // If this rule is being edited from an existing variable, show a "save back" button
+    const editingVarId = rule._editingVariableId || null;
+    const saveBtn = editingVarId
+      ? `<button class="btn btn-primary btn-mini" onclick="saveEditedVariable('${rule.id}', ${editingVarId})" title="Save changes to variable">✓ Save</button>
+         <button class="btn btn-ghost btn-mini" onclick="cancelVariableEdit('${rule.id}', ${editingVarId})" title="Cancel edit">✕</button>`
+      : `<button class="btn btn-ghost btn-mini" onclick="prepareVariableSave('${rule.id}')" title="Save as Variable">💾</button>`;
+
     return `
-      <div class="builder-rule" data-id="${rule.id}" style="flex-wrap: wrap;">
-        <button class="btn btn-ghost btn-mini" onclick="prepareVariableSave('${rule.id}')" title="Save as Variable">💾</button>
+      <div class="builder-rule builder-rule--math builder-rule--expanded" data-id="${rule.id}" style="flex-wrap: wrap;">
+        ${saveBtn}
         <select class="rule-field" style="width:110px" onchange="updateRule('${rule.id}', 'left_field', this.value)">
-          ${leftOpts}
+          ${renderFieldOptions(rule.left_field, true)}
         </select>
         ${termsHtml}
         <button class="btn btn-ghost btn-mini" onclick="addMathTerm('${rule.id}')" title="Add term">+</button>
@@ -1058,14 +1103,14 @@ function renderRule(rule, groupId) {
         </select>
         <input class="rule-value" type="number" step="0.01" value="${rule.value || ''}"
                oninput="updateRule('${rule.id}', 'value', Number(this.value))">
-        <button class="btn btn-ghost btn-mini" onclick="removeNode('${rule.id}')">×</button>
+        <button class="btn btn-danger btn-mini" onclick="removeNode('${rule.id}')">×</button>
       </div>`;
   }
 
   return `
     <div class="builder-rule" data-id="${rule.id}">
       <select class="rule-field" onchange="updateRule('${rule.id}', 'field', this.value)">
-        ${Object.entries(FILTER_FIELDS).map(([k,v]) => `<option value="${k}" ${rule.field === k ? 'selected' : ''}>${v.label}</option>`).join("")}
+        ${renderFieldOptions(rule.field)}
       </select>
       <select class="rule-op" onchange="updateRule('${rule.id}', 'op', this.value)">
         ${ops.map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
@@ -1091,6 +1136,62 @@ function findNode(tree, id) {
   return null;
 }
 
+
+function renderNumericFieldOptions(selectedValue) {
+  return renderFieldOptions(selectedValue, true);
+}
+
+/**
+ * Unified helper to render field selection options with sections and sorting.
+ * @param {string} selectedValue The currently selected field key.
+ * @param {boolean} numericOnly If true, only shows numeric-compatible fields.
+ */
+function renderFieldOptions(selectedValue, numericOnly = false) {
+  const vars = [];
+  const groupedRaws = {};
+
+  Object.entries(FILTER_FIELDS).forEach(([k, v]) => {
+    if (k === '__math__') return;
+    if (numericOnly && v.type !== 'number' && v.type !== 'variable' && v.type !== 'math') return;
+
+    if (v.type === 'variable') {
+      vars.push({ key: k, ...v });
+    } else {
+      const g = v.group || "Other";
+      if (!groupedRaws[g]) groupedRaws[g] = [];
+      groupedRaws[g].push({ key: k, ...v });
+    }
+  });
+
+  const varOpts = vars
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map(v => `<option value="${v.key}" ${selectedValue === v.key ? 'selected' : ''}>ƒ ${v.label}</option>`)
+    .join("");
+
+  const groupOrder = ["Relationship", "Profile", "Activity", "Network"];
+  const sortedGroupNames = Object.keys(groupedRaws).sort((a, b) => {
+    const idxA = groupOrder.indexOf(a);
+    const idxB = groupOrder.indexOf(b);
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return a.localeCompare(b);
+  });
+
+  const rawGroupsHtml = sortedGroupNames.map(g => {
+    const opts = groupedRaws[g]
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map(v => `<option value="${v.key}" ${selectedValue === v.key ? 'selected' : ''}>${v.label}</option>`)
+      .join("");
+    return `<optgroup label="${g}">${opts}</optgroup>`;
+  }).join("");
+
+  return `
+    ${varOpts ? `<optgroup label="My Variables">${varOpts}</optgroup>` : ''}
+    ${rawGroupsHtml}
+  `;
+}
+
 function addRule(groupId) {
   const group = findNode(builderState.tree, groupId);
   group.conditions.push({ id: Math.random().toString(36).substr(2, 9), field: "handle", op: "contains", value: "" });
@@ -1108,6 +1209,16 @@ function addMathExpressionRule(groupId) {
     value: 0.5
   });
   renderBuilder();
+  // Animate the new rule in
+  requestAnimationFrame(() => {
+    const builder = el("builder-root");
+    const newRules = builder.querySelectorAll(".builder-rule--math");
+    const last = newRules[newRules.length - 1];
+    if (last) {
+      last.classList.add("builder-rule--animate-in");
+      setTimeout(() => last.classList.remove("builder-rule--animate-in"), 400);
+    }
+  });
 }
 
 function addGroup(groupId) {
@@ -1174,62 +1285,232 @@ function removeMathTerm(ruleId, termIdx) {
   }
 }
 
-function toggleExpandVariable(ruleId) {
-  const el_rule = document.querySelector(`[data-id="${ruleId}"]`);
-  if (el_rule) {
-    el_rule.classList.toggle("expanded-variable");
-    renderBuilder();
+// ── Inline variable editing ────────────────────────────────────────────────────
+
+/**
+ * FIXED: Replaces a variable chip rule with an expanded math editor in-place.
+ * The math editor pre-populates from the variable's stored expression.
+ * Clicking the save/cancel buttons in the math editor updates the variable API
+ * and collapses back to the chip.
+ */
+function inlineEditVariable(ruleId) {
+  const node = findNode(builderState.tree, ruleId);
+  if (!node) return;
+
+  const variableName = node.field;
+  const variable = state.variables.find(v => v.name === variableName);
+  if (!variable) {
+    toast("Variable not found", "error");
+    return;
   }
+
+  let expr;
+  try {
+    expr = JSON.parse(variable.expression_tree);
+  } catch (e) {
+    toast("Could not parse variable expression", "error");
+    return;
+  }
+
+  // Preserve the current comparison op/value from the variable rule
+  const currentOp = node.op || "gt";
+  const currentValue = node.value || 0;
+
+  // Replace the variable rule node in-place with an expanded math rule
+  // We mutate the node object directly (findNode returns a reference)
+  node.field = "__math__";
+  node.left_field = expr.left_field || "followers_count";
+  node.extra_terms = expr.extra_terms || [{ op: "div", field: "follows_count" }];
+  node.op = currentOp;
+  node.value = currentValue;
+  node._editingVariableId = variable.id;
+  node._editingVariableName = variableName;
+
+  renderBuilder();
+
+  // Animate the expanded rule in
+  requestAnimationFrame(() => {
+    const ruleEl = document.querySelector(`.builder-rule[data-id="${ruleId}"]`);
+    if (ruleEl) {
+      ruleEl.classList.add("builder-rule--animate-in");
+      setTimeout(() => ruleEl.classList.remove("builder-rule--animate-in"), 400);
+    }
+  });
 }
 
-function openVariableEditor(variableId, ruleId) {
+/**
+ * Save changes made via inline editing back to the variable API,
+ * then collapse the math editor back to a variable chip.
+ */
+async function saveEditedVariable(ruleId, variableId) {
+  const node = findNode(builderState.tree, ruleId);
+  if (!node) return;
+
+  const newExpression = {
+    left_field: node.left_field,
+    extra_terms: node.extra_terms,
+  };
+
   const variable = state.variables.find(v => v.id === variableId);
   if (!variable) return;
 
   try {
-    const expr = JSON.parse(variable.expression_tree);
-    variableEditorState.isOpen = true;
-    variableEditorState.editingVariableId = variableId;
-    variableEditorState.editingExpression = expr;
+    await api(`/api/filters/${state.activeAlias}/variables/${variableId}`, {
+      method: "PUT",
+      body: JSON.stringify({ name: variable.name, expression_tree: JSON.stringify(newExpression) }),
+    });
 
-    el("var-editor-name").textContent = variable.name;
-    
-    const exprDesc = `${expr.left_field || 'field'} ${expr.extra_terms?.map(t => `${t.op} ${t.field}`).join(' ') || ''}`.trim();
-    el("variable-expression-display").textContent = exprDesc || "(empty expression)";
-    el("variable-editor-panel").style.display = "block";
+    // Reload variables so the update is reflected
+    await loadVariables();
+
+    // Collapse back to variable chip
+    const savedOp = node.op;
+    const savedValue = node.value;
+    const varName = node._editingVariableName || variable.name;
+
+    node.field = varName;
+    node.op = savedOp;
+    node.value = savedValue;
+    delete node.left_field;
+    delete node.extra_terms;
+    delete node._editingVariableId;
+    delete node._editingVariableName;
+
+    renderBuilder();
+
+    // Animate the chip in
+    requestAnimationFrame(() => {
+      const ruleEl = document.querySelector(`.builder-rule[data-id="${ruleId}"]`);
+      if (ruleEl) {
+        ruleEl.classList.add("builder-rule--animate-in");
+        setTimeout(() => ruleEl.classList.remove("builder-rule--animate-in"), 400);
+      }
+    });
+
+    toast(`Variable "${varName}" updated`);
   } catch (e) {
-    toast("Error loading variable expression", "error");
+    toast("Failed to save variable: " + e.message, "error");
   }
 }
 
-function closeVariableEditor() {
-  variableEditorState.isOpen = false;
-  variableEditorState.editingVariableId = null;
-  variableEditorState.editingExpression = null;
-  el("variable-editor-panel").style.display = "none";
+/**
+ * Cancel inline variable editing — collapse back to chip without saving.
+ */
+function cancelVariableEdit(ruleId, variableId) {
+  const node = findNode(builderState.tree, ruleId);
+  if (!node) return;
+
+  const varName = node._editingVariableName;
+  if (!varName) { removeNode(ruleId); return; }
+
+  const savedOp = node.op;
+  const savedValue = node.value;
+
+  node.field = varName;
+  node.op = savedOp;
+  node.value = savedValue;
+  delete node.left_field;
+  delete node.extra_terms;
+  delete node._editingVariableId;
+  delete node._editingVariableName;
+
+  renderBuilder();
 }
 
-function saveVariableEdits() {
-  if (!variableEditorState.editingVariableId || !variableEditorState.editingExpression) return;
-  
-  const variable = state.variables.find(v => v.id === variableEditorState.editingVariableId);
-  if (!variable) return;
+// ── Variable save flow ────────────────────────────────────────────────────────
+
+// Tracks the ruleId of the math rule being saved as a variable
+let _pendingVariableSaveRuleId = null;
+
+/**
+ * FIXED: Captures the math rule's ruleId so it can be removed after saving.
+ */
+function prepareVariableSave(ruleId) {
+  const node = findNode(builderState.tree, ruleId);
+  currentMathExpressionForVar = {
+    left_field: node.left_field,
+    extra_terms: node.extra_terms,
+  };
+  _pendingVariableSaveRuleId = ruleId;
+  el("var-save-btn").disabled = false;
+  openVariableManager();
+  toast("Expression captured. Give it a name to save.");
+}
+
+/**
+ * FIXED: After saving, removes the originating math rule and adds a variable chip.
+ */
+async function saveCurrentExpressionAsVariable() {
+  const name = el("var-name-input").value.trim().replace(/[^a-zA-Z0-9 ]/g, "").trim();
+  if (!name) return toast("Name required (letters, numbers, and spaces)", "error");
+  if (!currentMathExpressionForVar) return;
 
   const payload = {
-    name: variable.name,
-    expression_tree: JSON.stringify(variableEditorState.editingExpression)
+    name: name,
+    expression_tree: JSON.stringify(currentMathExpressionForVar),
   };
 
-  api(`/api/filters/${state.activeAlias}/variables/${variableEditorState.editingVariableId}`, {
-    method: "PUT",
-    body: JSON.stringify(payload)
-  }).then(() => {
-    toast(`Variable "${variable.name}" updated`);
-    closeVariableEditor();
-    loadVariables();
-  }).catch(e => {
-    toast("Error saving variable: " + e.message, "error");
+  await api(`/api/filters/${state.activeAlias}/variables`, {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
+
+  el("var-name-input").value = "";
+  await loadVariables();
+
+  // Remove the originating math rule from the tree
+  const originatingRuleId = _pendingVariableSaveRuleId;
+  if (originatingRuleId) {
+    // Find what op/value the math rule had so we can preserve them on the variable chip
+    const mathNode = findNode(builderState.tree, originatingRuleId);
+    const preservedOp = mathNode ? mathNode.op : "gt";
+    const preservedValue = mathNode ? mathNode.value : 0;
+
+    // Remove the math rule
+    removeNodeSilent(originatingRuleId);
+
+    // Find the group that contained it (root as fallback) and add variable chip
+    // We add to root since we don't track the parent group after removal
+    const savedVar = state.variables.find(v => v.name === name);
+    if (savedVar) {
+      const newRule = {
+        id: Math.random().toString(36).substr(2, 9),
+        field: savedVar.name,
+        op: preservedOp,
+        value: preservedValue,
+      };
+      builderState.tree.conditions.push(newRule);
+    }
+
+    _pendingVariableSaveRuleId = null;
+  }
+
+  renderBuilder();
+
+  // Animate the new variable chip in
+  requestAnimationFrame(() => {
+    const builder = el("builder-root");
+    const varRules = builder.querySelectorAll(".builder-rule--variable");
+    const last = varRules[varRules.length - 1];
+    if (last) {
+      last.classList.add("builder-rule--animate-in");
+      setTimeout(() => last.classList.remove("builder-rule--animate-in"), 400);
+    }
+  });
+
+  closeVariableManager();
+  toast(`Variable "${name}" saved!`);
+}
+
+/**
+ * Remove a node from the tree without re-rendering (used internally).
+ */
+function removeNodeSilent(id) {
+  const removeRecursive = (parent) => {
+    parent.conditions = parent.conditions.filter(c => c.id !== id);
+    parent.conditions.forEach(c => { if (c.conditions) removeRecursive(c); });
+  };
+  removeRecursive(builderState.tree);
 }
 
 async function saveFilterSet() {
@@ -1271,7 +1552,8 @@ function updateFilterFieldsWithVariables() {
   FILTER_FIELDS = { ...BASE_FILTER_FIELDS };
   if (state.variables && Array.isArray(state.variables)) {
     state.variables.forEach(v => {
-      FILTER_FIELDS[v.name] = { label: v.name, type: "variable" };
+      // editable: true = user-defined derived variable, shows pencil icon
+      FILTER_FIELDS[v.name] = { label: v.name, type: "variable", editable: true };
     });
   }
 }
@@ -1305,44 +1587,10 @@ function renderVariableList() {
 }
 
 function openVariableManager() { el("variable-modal").classList.add("open"); }
-function closeVariableManager() { el("variable-modal").classList.remove("open"); currentMathExpressionForVar = null; el("var-save-btn").disabled = true; }
-
-function prepareVariableSave(ruleId) {
-    const node = findNode(builderState.tree, ruleId);
-    currentMathExpressionForVar = {
-        left_field: node.left_field,
-        extra_terms: node.extra_terms
-    };
-    el("var-save-btn").disabled = false;
-    openVariableManager();
-    toast("Expression captured. Give it a name to save.");
-}
-
-async function saveCurrentExpressionAsVariable() {
-    const name = el("var-name-input").value.trim().replace(/[^a-zA-Z0-9 ]/g, "").trim();
-    if (!name) return toast("Name required (letters, numbers, and spaces)", "error");
-    if (!currentMathExpressionForVar) return;
-
-    const payload = {
-        name: name,
-        expression_tree: JSON.stringify(currentMathExpressionForVar)
-    };
-
-    await api(`/api/filters/${state.activeAlias}/variables`, {
-        method: "POST",
-        body: JSON.stringify(payload)
-    });
-    
-    el("var-name-input").value = "";
-    await loadVariables();
-    
-    const savedVar = state.variables.find(v => v.name === name);
-    if (savedVar) {
-      addVariableToFilter(savedVar.name);
-    }
-    
-    closeVariableManager();
-    toast(`Variable "${name}" saved!`);
+function closeVariableManager() {
+  el("variable-modal").classList.remove("open");
+  currentMathExpressionForVar = null;
+  el("var-save-btn").disabled = true;
 }
 
 function addVariableToFilter(variableName) {
@@ -1362,6 +1610,29 @@ async function deleteVariable(id) {
     if (!confirm("Delete variable? Filters using it will break.")) return;
     await api(`/api/filters/${state.activeAlias}/variables/${id}`, { method: "DELETE" });
     await loadVariables();
+}
+
+// ── Legacy variable editor (kept for compatibility, no longer primary UI) ─────
+function openVariableEditor(variableId, ruleId) {
+  // Redirect to inline edit if we have a ruleId
+  if (ruleId) {
+    inlineEditVariable(ruleId);
+    return;
+  }
+  // Fallback: open manager
+  openVariableManager();
+}
+
+function closeVariableEditor() {
+  variableEditorState.isOpen = false;
+  variableEditorState.editingVariableId = null;
+  variableEditorState.editingExpression = null;
+  const panel = el("variable-editor-panel");
+  if (panel) panel.style.display = "none";
+}
+
+function saveVariableEdits() {
+  closeVariableEditor();
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
