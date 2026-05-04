@@ -170,6 +170,12 @@ def _build_recursive_where_clause(condition_tree: dict, params: list[Any]) -> st
         if not column:
             continue
 
+        # Coerce values for known boolean fields (FILTERABLE_FLAGS contains the bool keys)
+        if field in FILTERABLE_FLAGS:
+            if isinstance(value, str):
+                value = value.lower() == "true"
+            value = bool(value)
+
         if cond_op == "eq":
             if value is None:
                 parts.append(f"{column} IS NULL")

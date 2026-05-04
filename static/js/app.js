@@ -194,12 +194,6 @@ function badges(u) {
   return b.join("");
 }
 
-function shortDate(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
-}
-
 function userRow(u) {
   return `
     <a class="user-row" href="${u.profile_url}" target="_blank" rel="noopener">
@@ -421,6 +415,10 @@ async function fetchUsers(append = false, silent = false) {
   const limit = append ? state.pagination.limit : Math.max(state.pagination.limit, state.users.length);
   const offset = append ? state.pagination.offset : 0;
 
+  if (state.filters.filter_tree) {
+    params.set("filter_tree", JSON.stringify(state.filters.filter_tree));
+  }
+
   if (state.filters.search) params.set("search", state.filters.search);
   params.set("sort_by", state.sort.by);
   params.set("sort_dir", state.sort.dir);
@@ -431,9 +429,8 @@ async function fetchUsers(append = false, silent = false) {
   const boolFlags = [
     "i_follow_them","they_follow_me","is_inactive","is_repost_heavy",
     "is_one_sided_follow","is_follower_only","interacted_with_owner","muted","blocked", 
-    "exclude_stubs", "exclude_unanalyzed"
+    "exclude_stubs", "exclude_unanalyzed", "is_stub"
   ];
-  const boolFlagsWithIsStub = [...boolFlags, "is_stub"]; // New
   for (const key of boolFlags) {
     if (state.filters[key] !== null && state.filters[key] !== undefined) {
       params.set(key, state.filters[key]);
@@ -537,7 +534,8 @@ function selectTab(tabId) {
   state.activeTab = tabId;
   state.pagination.offset = 0;
 
-  // Reset all filter flags, then apply tab preset
+  // Reset all filter flags and logic trees, then apply tab preset
+  state.filters.filter_tree = null;
   const boolFlags = [
     "i_follow_them","they_follow_me","is_inactive","is_repost_heavy",
     "is_one_sided_follow","is_follower_only","interacted_with_owner","muted","blocked",
@@ -546,6 +544,7 @@ function selectTab(tabId) {
   for (const key of boolFlags) state.filters[key] = null;
   Object.assign(state.filters, tab.filters);
 
+  renderCustomFilters();
   renderNav();
   fetchUsers();
 }
@@ -556,6 +555,8 @@ function selectCustomFilter(id) {
   state.activeTab = 'custom-' + id;
   for (let k in state.filters) state.filters[k] = null;
   state.filters.filter_tree = typeof f.condition_tree === 'string' ? JSON.parse(f.condition_tree) : f.condition_tree;
+  renderNav();
+  renderCustomFilters();
   fetchUsers();
 }
 
@@ -936,7 +937,7 @@ function renderGroup(group) {
         ${group.id !== 'root' ? `<button class="btn btn-danger btn-mini" onclick="removeNode('${group.id}')">×</button>` : ''}
       </div>
       <div class="group-content">
-        ${group.conditions.map(c => c.op ? renderGroup(c) : renderRule(c, group.id)).join("")}
+        ${group.conditions.map(c => c.conditions ? renderGroup(c) : renderRule(c, group.id)).join("")}
       </div>
     </div>`;
 }
@@ -958,7 +959,8 @@ function renderRule(rule, groupId) {
           <option value="false" ${rule.value === false ? 'selected' : ''}>False</option>
         </select>` : `
         <input class="rule-value" type="${fieldDef.type === 'number' ? 'number' : 'text'}" 
-               value="${rule.value || ''}" oninput="updateRule('${rule.id}', 'value', this.value)">`}
+               value="${rule.value || ''}"
+               oninput="updateRule('${rule.id}', 'value', ${fieldDef.type === 'number' ? 'Number(this.value)' : 'this.value'})">`}
       <button class="btn btn-ghost btn-mini" onclick="removeNode('${rule.id}')">×</button>
     </div>`;
 }
@@ -996,7 +998,16 @@ function removeNode(id) {
 function updateRule(id, key, val) {
   const node = findNode(builderState.tree, id);
   node[key] = val;
-  if (key === 'field') { node.op = 'eq'; node.value = ''; renderBuilder(); }
+  if (key === 'field') {
+    const fieldDef = FILTER_FIELDS[val] || { type: "string" };
+    node.op = 'eq';
+    // Initialize value with type-appropriate defaults
+    if (fieldDef.type === 'boolean') node.value = true;
+    else if (fieldDef.type === 'number') node.value = 0;
+    else node.value = '';
+
+    renderBuilder();
+  }
 }
 
 function updateGroupOp(id, op) { findNode(builderState.tree, id).op = op; }
