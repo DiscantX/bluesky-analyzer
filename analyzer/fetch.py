@@ -11,6 +11,7 @@ import logging
 from typing import AsyncGenerator, Any
 
 from analyzer.client import BskyClient
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,24 @@ async def fetch_all_followers(client: BskyClient, actor: str) -> list:
     return results
 
 
-async def fetch_author_feed(client: BskyClient, actor_did: str, limit: int = 20) -> list:
+async def fetch_profiles_detailed(client: BskyClient, dids: list[str]) -> list:
+    """
+    Fetch detailed profiles in batches of 25 (the API limit).
+    This ensures we get followers_count, follows_count, and posts_count.
+    """
+    results = []
+    for i in range(0, len(dids), 25):
+        batch_dids = dids[i:i + 25]
+        try:
+            resp = await client.get_profiles(batch_dids)
+            results.extend(resp.profiles)
+        except Exception as e:
+            logger.error(f"Failed to fetch profiles batch: {e}")
+        await asyncio.sleep(0.1)
+    return results
+
+
+async def fetch_author_feed(client: BskyClient, actor_did: str, limit: int = 100) -> list:
     """
     Fetch recent feed items for a single actor.
     Returns an empty list on any error (private/suspended accounts, etc.)
@@ -63,7 +81,7 @@ async def fetch_author_feed(client: BskyClient, actor_did: str, limit: int = 20)
 async def fetch_feeds_concurrent(
     client: BskyClient,
     dids: list[str],
-    limit_per_actor: int = 20,
+    limit_per_actor: int = 100,
     progress_callback=None,
 ) -> AsyncGenerator[tuple[str, list], None]:
     """
@@ -86,3 +104,66 @@ async def fetch_feeds_concurrent(
         if progress_callback:
             await progress_callback(completed, total)
         yield did, items
+
+
+async def public_fetch_graph(
+    actor_did: str,
+    collection: str = "follows",
+    limit: int = 100,
+    cursor: str | None = None
+) -> dict:
+    """
+    Fetch follows or followers using the unauthenticated public AppView.
+    Used for graph crawl to save authenticated API budget.
+    """
+    url = f"https://public.api.bsky.app/xrpc/app.bsky.graph.get{collection.capitalize()}"
+    params = {"actor": actor_did, "limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def public_fetch_profiles(dids: list[str]) -> list[dict]:
+    """Fetch public profile details from AppView in batches of 25."""
+    results = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for i in range(0, len(dids), 25):
+            batch = dids[i:i + 25]
+            params = [("actors", did) for did in batch]
+            try:
+                resp = await client.get(
+                    "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles",
+                    params=params,
+                )
+                resp.raise_for_status()
+                results.extend(resp.json().get("profiles", []))
+            except Exception as e:
+                logger.error(f"Public profile hydration failed: {e}")
+            await asyncio.sleep(0.1)
+    return results
+
+
+async def fetch_all_graph_public(actor_did: str, collection: str = "follows", on_page=None) -> list[dict]:
+    """Paginate through the public graph endpoint."""
+    results = []
+    cursor = None
+    while True:
+        try:
+            data = await public_fetch_graph(actor_did, collection, cursor=cursor)
+            batch = data.get(collection, [])
+            results.extend(batch)
+            if on_page:
+                await on_page(batch)
+            cursor = data.get("cursor")
+            if not cursor or not batch:
+                break
+            # Polite delay for public API (approx 600 req/min)
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Public fetch failed for {actor_did} {collection}: {e}")
+            break
+    return results

@@ -119,6 +119,37 @@ body {
 .btn-danger:hover { background: var(--danger); color: #fff; }
 .btn:disabled { opacity: 0.45; pointer-events: none; }
 
+/* ── Toggle Switch ── */
+.toggle-wrap {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle-wrap input { display: none; }
+.toggle-slider {
+  width: 32px;
+  height: 18px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  position: relative;
+  transition: background 0.2s;
+}
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  top: 2px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+.toggle-wrap input:checked + .toggle-slider { background: rgba(167,139,250,0.2); border-color: var(--accent2); }
+.toggle-wrap input:checked + .toggle-slider::before { transform: translateX(14px); background: var(--accent2); }
+
 /* ─────────────────────────────────────────────────────────────────────────────
    LAYOUT: sidebar + main
 ───────────────────────────────────────────────────────────────────────────── */
@@ -203,6 +234,7 @@ body {
   padding: 0.6rem 1rem;
   border-right: 1px solid var(--border);
   display: flex;
+  min-width: 100px;
   flex-direction: column;
   gap: 0.1rem;
 }

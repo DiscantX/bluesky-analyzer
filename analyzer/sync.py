@@ -15,13 +15,16 @@ from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 from analyzer.client import BskyClient
-from analyzer.fetch import fetch_all_follows, fetch_all_followers, fetch_feeds_concurrent
+from analyzer.fetch import fetch_all_follows, fetch_all_followers, fetch_feeds_concurrent, fetch_profiles_detailed
 from analyzer.analyze import build_tracked_user_data
-from db.models import SavedAccount, SyncRun, TrackedUser
+from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge
+from db.profile_store import upsert_profile_relationship
+from analyzer.manager import bus
+from analyzer.metrics import run_graph_analysis
 
 logger = logging.getLogger(__name__)
 
-FEED_SAMPLE_SIZE = 20          # posts to sample per account
+FEED_SAMPLE_SIZE = 100         # app.bsky.feed.getAuthorFeed max page size
 INACTIVE_DAYS = 90
 REPOST_THRESHOLD = 0.70
 
@@ -37,16 +40,16 @@ def _evt(kind: str, **kwargs) -> dict:
 async def run_sync(
     saved_account: SavedAccount,
     client: BskyClient,
-    progress_queue: asyncio.Queue,
+    alias: str,
 ) -> None:
     """
-    Perform a full sync. Progress events are pushed to `progress_queue`
+    Perform a full sync. Progress events are pushed to the broadcast bus
     so the SSE endpoint can stream them to the browser.
     """
     sync_run = await SyncRun.create(account=saved_account, status="running")
 
     async def emit(kind: str, **kwargs):
-        await progress_queue.put(_evt(kind, sync_run_id=sync_run.id, **kwargs))
+        await bus.emit(alias, _evt(kind, operation="sync", sync_run_id=sync_run.id, **kwargs))
 
     try:
         await emit("start", message="Starting sync…")
@@ -60,11 +63,16 @@ async def run_sync(
         await saved_account.save()
 
         # ── 2. Fetch follows + followers ───────────────────────────────────────
-        await emit("phase", message="Fetching follows…")
-        follows = await fetch_all_follows(client, saved_account.handle)
+        await emit("phase", message="Fetching connections…")
+        
+        follows_task = fetch_all_follows(client, saved_account.handle)
+        followers_task = fetch_all_followers(client, saved_account.handle)
+        follows, followers = await asyncio.gather(follows_task, followers_task)
 
-        await emit("phase", message="Fetching followers…", follows=len(follows))
-        followers = await fetch_all_followers(client, saved_account.handle)
+        for f in follows:
+            await FollowEdge.get_or_create(follower_did=owner_did, followee_did=f.did)
+        for f in followers:
+            await FollowEdge.get_or_create(follower_did=f.did, followee_did=owner_did)
 
         sync_run.follows_fetched = len(follows)
         sync_run.followers_fetched = len(followers)
@@ -83,6 +91,14 @@ async def run_sync(
 
         all_dids = list(profile_map.keys())
         total = len(all_dids)
+
+        # ── 2.5 Hydrate profiles with social counts ───────────────────────────
+        await emit("phase", message=f"Hydrating {total} profiles…")
+        detailed_profiles = await fetch_profiles_detailed(client, all_dids)
+        logger.info(f"Hydrated {len(detailed_profiles)} out of {len(all_dids)} profiles.")
+        
+        for dp in detailed_profiles:
+            profile_map[dp.did] = dp
 
         await emit(
             "phase",
@@ -114,12 +130,7 @@ async def run_sync(
             )
             data["last_analyzed_at"] = datetime.now(timezone.utc)
 
-            # Upsert — create or update
-            await TrackedUser.update_or_create(
-                defaults=data,
-                owner=saved_account,
-                did=did,
-            )
+            await upsert_profile_relationship(saved_account, data)
 
             if completed % 10 == 0 or completed == total:
                 pct = int(completed / total * 100)
@@ -133,12 +144,20 @@ async def run_sync(
 
         # ── 4. Mark accounts no longer in follows/followers as stale ──────────
         # (don't delete — historical data is useful)
-        await TrackedUser.filter(
+        await AccountRelationship.filter(
             owner=saved_account,
         ).exclude(did__in=list(all_dids)).update(
             i_follow_them=False,
             they_follow_me=False,
         )
+
+        # ── 5. Run Graph Analysis ──────────────────────────────────────────────
+        await emit("phase", message="Computing network metrics (FlowRank/Communities)…")
+        try:
+            await run_graph_analysis(saved_account)
+        except Exception as e:
+            logger.exception(f"Graph analysis failed after sync for {saved_account.handle}: {e}")
+            await emit("phase", message="Sync complete; graph metrics will retry later.")
 
         # ── 5. Finalise ────────────────────────────────────────────────────────
         saved_account.last_synced_at = datetime.now(timezone.utc)

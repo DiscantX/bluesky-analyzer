@@ -148,6 +148,14 @@ def build_tracked_user_data(
     Combine a profile object and feed items into a flat dict ready for
     upserting into the TrackedUser table.
     """
+    def _get(obj, *keys):
+        """Helper to check multiple possible attribute/key names for atproto models."""
+        for k in keys:
+            val = getattr(obj, k, None)
+            if val is not None:
+                return val
+        return 0
+
     feed_stats = analyze_feed(feed_items, owner_did)
     flags = compute_flags(
         feed_stats, i_follow_them, they_follow_me, inactive_days, repost_threshold
@@ -159,9 +167,9 @@ def build_tracked_user_data(
         "display_name": getattr(profile, "display_name", None) or "",
         "avatar_url": getattr(profile, "avatar", None) or "",
         "profile_url": f"https://bsky.app/profile/{profile.handle}",
-        "followers_count": getattr(profile, "followers_count", 0) or 0,
-        "follows_count": getattr(profile, "follows_count", 0) or 0,
-        "posts_count": getattr(profile, "posts_count", 0) or 0,
+        "followers_count": _get(profile, "followers_count", "followersCount"),
+        "follows_count": _get(profile, "follows_count", "followsCount"),
+        "posts_count": _get(profile, "posts_count", "postsCount"),
         "i_follow_them": i_follow_them,
         "they_follow_me": they_follow_me,
         # Feed stats

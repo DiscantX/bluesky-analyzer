@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 import config
 from db.models import SavedAccount
+from analyzer.worker import schedule_sync
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -26,6 +27,8 @@ class AccountResponse(BaseModel):
     handle: str
     did: str | None
     last_synced_at: str | None
+    auto_sync_enabled: bool
+    auto_crawl_enabled: bool
 
     class Config:
         from_attributes = True
@@ -41,10 +44,25 @@ async def list_accounts():
             handle=a.handle,
             did=a.did,
             last_synced_at=a.last_synced_at.isoformat() if a.last_synced_at else None,
+            auto_sync_enabled=a.auto_sync_enabled,
+            auto_crawl_enabled=a.auto_crawl_enabled,
         )
         for a in accounts
     ]
 
+@router.patch("/{alias}/settings")
+async def update_settings(alias: str, auto_sync: bool = None, auto_crawl: bool = None):
+    account = await SavedAccount.get_or_none(alias=alias)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    
+    if auto_sync is not None:
+        account.auto_sync_enabled = auto_sync
+    if auto_crawl is not None:
+        account.auto_crawl_enabled = auto_crawl
+        
+    await account.save()
+    return {"status": "ok"}
 
 @router.post("/", response_model=AccountResponse, status_code=201)
 async def add_account(body: AddAccountRequest):
@@ -56,12 +74,16 @@ async def add_account(body: AddAccountRequest):
         defaults={"handle": body.handle},
         alias=body.alias,
     )
+    if account.auto_sync_enabled:
+        schedule_sync(account)
     return AccountResponse(
         id=account.id,
         alias=account.alias,
         handle=account.handle,
         did=account.did,
         last_synced_at=None,
+        auto_sync_enabled=account.auto_sync_enabled,
+        auto_crawl_enabled=account.auto_crawl_enabled,
     )
 
 

@@ -11,8 +11,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from db.models import SavedAccount, TrackedUser
-from db.queries import build_query, get_stats, SORTABLE_FIELDS, FILTERABLE_FLAGS
+from db.models import SavedAccount
+from db.queries import query_users, get_stats
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -42,36 +42,51 @@ class TrackedUserResponse(BaseModel):
     is_follower_only: bool
     muted: bool
     blocked: bool
+    # Graph metrics
+    flowrank_score: float | None
+    community_id: int | None
+    in_subgraph_degree: int
+    crawl_tier: int
+    discovered_via: str | None
     last_analyzed_at: str | None
 
 
-def _serialize(u: TrackedUser) -> TrackedUserResponse:
+def _dt(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _serialize(u: dict) -> TrackedUserResponse:
     return TrackedUserResponse(
-        id=u.id,
-        did=u.did,
-        handle=u.handle,
-        display_name=u.display_name,
-        avatar_url=u.avatar_url,
-        profile_url=u.profile_url,
-        followers_count=u.followers_count,
-        follows_count=u.follows_count,
-        posts_count=u.posts_count,
-        i_follow_them=u.i_follow_them,
-        they_follow_me=u.they_follow_me,
-        last_post_at=u.last_post_at.isoformat() if u.last_post_at else None,
-        days_since_post=u.days_since_post,
-        repost_ratio=u.repost_ratio,
-        repost_count=u.repost_count,
-        original_post_count=u.original_post_count,
-        sampled_post_count=u.sampled_post_count,
-        interacted_with_owner=u.interacted_with_owner,
-        is_inactive=u.is_inactive,
-        is_repost_heavy=u.is_repost_heavy,
-        is_one_sided_follow=u.is_one_sided_follow,
-        is_follower_only=u.is_follower_only,
-        muted=u.muted,
-        blocked=u.blocked,
-        last_analyzed_at=u.last_analyzed_at.isoformat() if u.last_analyzed_at else None,
+        id=u["id"],
+        did=u["did"],
+        handle=u["handle"],
+        display_name=u["display_name"],
+        avatar_url=u["avatar_url"],
+        profile_url=u["profile_url"],
+        followers_count=u["followers_count"] or 0,
+        follows_count=u["follows_count"] or 0,
+        posts_count=u["posts_count"] or 0,
+        i_follow_them=bool(u["i_follow_them"]),
+        they_follow_me=bool(u["they_follow_me"]),
+        last_post_at=_dt(u["last_post_at"]) if u["last_post_at"] else None,
+        days_since_post=u["days_since_post"],
+        repost_ratio=u["repost_ratio"] or 0.0,
+        repost_count=u["repost_count"] or 0,
+        original_post_count=u["original_post_count"] or 0,
+        sampled_post_count=u["sampled_post_count"] or 0,
+        interacted_with_owner=bool(u["interacted_with_owner"]),
+        is_inactive=bool(u["is_inactive"]),
+        is_repost_heavy=bool(u["is_repost_heavy"]),
+        is_one_sided_follow=bool(u["is_one_sided_follow"]),
+        is_follower_only=bool(u["is_follower_only"]),
+        muted=bool(u["muted"]),
+        blocked=bool(u["blocked"]),
+        flowrank_score=u["flowrank_score"],
+        community_id=u["community_id"],
+        in_subgraph_degree=u["in_subgraph_degree"] or 0,
+        crawl_tier=u["crawl_tier"] or 0,
+        discovered_via=u["discovered_via"],
+        last_analyzed_at=_dt(u["last_analyzed_at"]) if u["last_analyzed_at"] else None,
     )
 
 
@@ -102,6 +117,10 @@ async def list_users(
     interacted_with_owner: Optional[bool] = Query(None),
     muted: Optional[bool] = Query(None),
     blocked: Optional[bool] = Query(None),
+    # Advanced / Graph filters
+    filter_tree: Optional[str] = Query(None),
+    min_flowrank: Optional[float] = Query(None),
+    min_in_degree: Optional[int] = Query(None),
     # Numeric range filters
     min_days_inactive: Optional[int] = Query(None, ge=0),
     min_repost_ratio: Optional[float] = Query(None, ge=0.0, le=1.0),
@@ -135,10 +154,13 @@ async def list_users(
         if val is not None:
             flags[name] = val
 
-    qs = build_query(
+    users, total = await query_users(
         owner_id=account.id,
         search=search,
         flags=flags or None,
+        filter_tree=filter_tree,
+        min_flowrank=min_flowrank,
+        min_in_degree=min_in_degree,
         min_days_inactive=min_days_inactive,
         min_repost_ratio=min_repost_ratio,
         max_repost_ratio=max_repost_ratio,
@@ -149,22 +171,6 @@ async def list_users(
         limit=limit,
         offset=offset,
     )
-
-    users = await qs
-    total = await build_query(
-        owner_id=account.id,
-        search=search,
-        flags=flags or None,
-        min_days_inactive=min_days_inactive,
-        min_repost_ratio=min_repost_ratio,
-        max_repost_ratio=max_repost_ratio,
-        min_followers=min_followers,
-        max_followers=max_followers,
-        sort_by=sort_by,
-        sort_dir=sort_dir,
-        limit=99999,
-        offset=0,
-    ).count()
 
     return {
         "total": total,

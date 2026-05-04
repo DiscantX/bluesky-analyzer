@@ -9,6 +9,10 @@ const state = {
   total: 0,
   loading: false,
   syncing: false,
+  crawling: false,
+  syncStream: null,
+  crawlStream: null,
+  statusTimer: null,
 
   // Filter / sort state — any new filter just gets added here
   filters: {
@@ -37,11 +41,14 @@ const state = {
 
 // Tab definitions — each sets a filter preset
 const TABS = [
-  { id: "all",        label: "All Follows",      icon: "👤", statKey: "total_follows",  filters: { i_follow_them: true } },
+  { id: "all",        label: "All Profiles",     icon: "🌐", statKey: "graph_size",     filters: {} },
+  { id: "follows",    label: "Follows",          icon: "👤", statKey: "total_follows",  filters: { i_follow_them: true } },
+  { id: "followers",  label: "Followers",        icon: "👥", statKey: "total_followers",filters: { they_follow_me: true } },
+  { id: "stubs",      label: "Discovered",       icon: "🔍", statKey: "pending",        filters: { crawl_tier: 0 } },
   { id: "inactive",   label: "Inactive",          icon: "⏸", statKey: "inactive",       filters: { i_follow_them: true, is_inactive: true } },
   { id: "repost",     label: "Repost Heavy",      icon: "🔁", statKey: "repost_heavy",   filters: { i_follow_them: true, is_repost_heavy: true } },
   { id: "onesided",   label: "One-Sided",         icon: "↗",  statKey: "one_sided",      filters: { is_one_sided_follow: true } },
-  { id: "followers",  label: "Followers Only",    icon: "↙",  statKey: "follower_only",  filters: { is_follower_only: true } },
+  { id: "followersonly", label: "Followers Only", icon: "↙",  statKey: "follower_only",  filters: { is_follower_only: true } },
   { id: "nointeract", label: "No Interactions",   icon: "💤", statKey: "no_interaction", filters: { i_follow_them: true, interacted_with_owner: false } },
 ];
 
@@ -64,9 +71,29 @@ async function api(path, opts = {}) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    const error = new Error(err.detail || res.statusText);
+    error.status = res.status;
+    throw error;
   }
   return res.status === 204 ? null : res.json();
+}
+
+async function logError(msg, err) {
+  console.error(msg, err);
+  try {
+    await fetch("/api/client-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        level: "error",
+        message: msg,
+        context: {
+          error: err?.message || err?.toString(),
+          alias: state.activeAlias
+        }
+      })
+    });
+  } catch (e) {}
 }
 
 // ── Rendering helpers ─────────────────────────────────────────────────────────
@@ -90,6 +117,15 @@ function badges(u) {
   if (u.is_follower_only)   b.push(`<span class="badge badge-follower">↙ follows you</span>`);
   if (!u.interacted_with_owner && u.i_follow_them)
                             b.push(`<span class="badge badge-nointeract">💤 no interact</span>`);
+  
+  // New Graph Badges
+  if (u.flowrank_score > 0) {
+    const rankVal = (u.flowrank_score * 1000).toFixed(2);
+    b.push(`<span class="badge" style="background:rgba(167,139,250,0.1);color:var(--accent2);border:1px solid rgba(167,139,250,0.3)">💎 Rank: ${rankVal}</span>`);
+  }
+  if (u.community_id !== null && u.community_id !== undefined) {
+    b.push(`<span class="badge" style="background:rgba(255,255,255,0.05);color:var(--muted)">🌐 Grp ${u.community_id}</span>`);
+  }
   return b.join("");
 }
 
@@ -128,11 +164,19 @@ function renderStats() {
   el("stat-repost").textContent     = fmt(s.repost_heavy ?? "—");
   el("stat-onesided").textContent   = fmt(s.one_sided ?? "—");
   el("stat-nointeract").textContent = fmt(s.no_interaction ?? "—");
+  el("stat-discovered").textContent = fmt(s.graph_size ?? "—");
+  el("stat-analysed").textContent   = fmt(s.analysed ?? "—");
+  el("stat-pending").textContent    = fmt(s.pending ?? "—");
 
   const synced = s.last_synced_at
     ? new Date(s.last_synced_at).toLocaleString()
     : "Never";
   el("last-synced").textContent = `Last synced: ${synced}`;
+
+  // Prevent crawling until initial sync provides a seed
+  const canCrawl = !!s.last_synced_at;
+  el("crawl-btn").disabled = !canCrawl;
+  el("crawl-btn").textContent = state.crawling ? "■ Stop Crawl" : "✨ Crawl";
 }
 
 // ── Sidebar nav ───────────────────────────────────────────────────────────────
@@ -155,7 +199,7 @@ function renderNav() {
 function renderUsers() {
   const list = el("user-list");
 
-  if (state.loading) {
+  if (state.loading && state.users.length === 0) {
     list.innerHTML = `<div class="state-box">
       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/>
@@ -192,9 +236,15 @@ function renderAccountPills() {
   }
   wrap.innerHTML = state.accounts.map(a => `
     <button class="account-pill ${a.alias === state.activeAlias ? "active" : ""}"
-            onclick="switchAccount('${a.alias}')">
+            onclick="switchAccount('${a.alias}')"
+            title="Alias: ${a.alias}">
       @${a.handle}
     </button>`).join("");
+  
+  const activeAcc = state.accounts.find(a => a.alias === state.activeAlias);
+  if (activeAcc) {
+    el("auto-crawl-toggle").checked = activeAcc.auto_crawl_enabled;
+  }
 }
 
 // ── Sort controls ─────────────────────────────────────────────────────────────
@@ -208,15 +258,21 @@ function renderSortControls() {
 // ── Fetch data from API ───────────────────────────────────────────────────────
 async function fetchStats() {
   if (!state.activeAlias) return;
-  state.stats = await api(`/api/users/${state.activeAlias}/stats`);
-  renderStats();
-  renderNav();
+  try {
+    state.stats = await api(`/api/users/${state.activeAlias}/stats`);
+    renderStats();
+    renderNav();
+  } catch (e) {
+    logError("fetchStats failed:", e);
+  }
 }
 
 async function fetchUsers() {
   if (!state.activeAlias) return;
   state.loading = true;
-  renderUsers();
+  
+  // Only show loading state if we don't have existing data to display
+  if (state.users.length === 0) renderUsers();
 
   const params = new URLSearchParams();
 
@@ -251,9 +307,8 @@ async function fetchUsers() {
     state.users = data.users;
     state.total = data.total;
   } catch (e) {
+    logError("fetchUsers failed:", e);
     toast(e.message, "error");
-    state.users = [];
-    state.total = 0;
   }
 
   state.loading = false;
@@ -263,6 +318,50 @@ async function fetchUsers() {
 async function refresh() {
   await fetchStats();
   await fetchUsers();
+}
+
+async function reconcileOperationStatus() {
+  if (!state.activeAlias) return;
+  try {
+    const status = await api(`/api/sync/${state.activeAlias}/status`);
+    const sync = status.sync;
+    const crawl = status.crawl;
+
+    if (sync?.status === "running" && status.sync_running && !state.syncing) {
+      state.syncing = true;
+      el("sync-btn").disabled = true;
+      showSyncBar("Sync running…", null);
+      attachSyncStream();
+    } else if (!status.sync_running && state.syncing) {
+      state.syncing = false;
+      if (state.syncStream) {
+        state.syncStream.close();
+        state.syncStream = null;
+      }
+      el("sync-btn").disabled = false;
+    }
+
+    if (crawl?.status === "running" && crawl?.is_running) {
+      state.crawling = true;
+      showSyncBar(crawl.last_message || "Expanding network (Discovery)…", null);
+      if (!state.crawlStream) attachCrawlStream();
+      renderStats();
+    } else if (!crawl?.is_running && state.crawling) {
+      state.crawling = false;
+      if (state.crawlStream) {
+        state.crawlStream.close();
+        state.crawlStream = null;
+      }
+      renderStats();
+    }
+  } catch (e) {
+    logError("reconcileOperationStatus failed:", e);
+  }
+}
+
+function startStatusWatcher() {
+  clearInterval(state.statusTimer);
+  state.statusTimer = setInterval(reconcileOperationStatus, 2500);
 }
 
 // ── Tab selection ─────────────────────────────────────────────────────────────
@@ -290,7 +389,7 @@ async function switchAccount(alias) {
   state.activeAlias = alias;
   state.users = [];
   state.stats = {};
-  state.activeTab = "all";
+  state.activeTab = "follows";
 
   // Reset filters to "all follows" default
   for (const key of Object.keys(state.filters)) state.filters[key] = null;
@@ -300,6 +399,21 @@ async function switchAccount(alias) {
   renderNav();
   renderUsers();
   await refresh();
+  await reconcileOperationStatus();
+}
+
+async function toggleAutoCrawl(enabled) {
+  if (!state.activeAlias) return;
+  try {
+    await api(`/api/accounts/${state.activeAlias}/settings?auto_crawl=${enabled}`, { method: "PATCH" });
+    const acc = state.accounts.find(a => a.alias === state.activeAlias);
+    if (acc) acc.auto_crawl_enabled = enabled;
+    toast(`Auto-crawl ${enabled ? "enabled" : "disabled"} for ${state.activeAlias}`);
+  } catch (e) {
+    logError("toggleAutoCrawl failed:", e);
+    toast(e.message, "error");
+    el("auto-crawl-toggle").checked = !enabled;
+  }
 }
 
 // ── Sync ──────────────────────────────────────────────────────────────────────
@@ -313,32 +427,51 @@ async function startSync() {
   try {
     await api(`/api/sync/${state.activeAlias}`, { method: "POST" });
   } catch (e) {
-    toast(e.message, "error");
-    endSync();
-    return;
+    if (e.status !== 409) {
+        logError("startSync failed:", e);
+        toast(e.message, "error");
+        endSync();
+        return;
+    }
+    // If 409, it's already running, so just connect to the stream
+    toast("Sync already in progress, attaching to stream...");
   }
 
-  // Connect to SSE stream
-  const es = new EventSource(`/api/sync/${state.activeAlias}/stream`);
+  attachSyncStream();
+}
+
+function attachSyncStream() {
+  if (state.syncStream) {
+    state.syncStream.close();
+  }
+
+  const es = new EventSource(`/api/sync/${state.activeAlias}/stream?operation=sync`);
+  state.syncStream = es;
 
   es.onmessage = (evt) => {
     const data = JSON.parse(evt.data);
 
     if (data.kind === "progress") {
       showSyncBar(data.message, data.pct);
+      // Refresh the UI list as we get updates
+      fetchStats();
+      fetchUsers();
     } else if (data.kind === "phase") {
       showSyncBar(data.message, null);
     } else if (data.kind === "done") {
       es.close();
+      state.syncStream = null;
       showSyncBar("Sync complete!", 100);
       setTimeout(() => {
         hideSyncBar();
         endSync();
         refresh();
+        reconcileOperationStatus();
         toast("Sync complete!");
       }, 800);
     } else if (data.kind === "error") {
       es.close();
+      state.syncStream = null;
       hideSyncBar();
       endSync();
       toast("Sync error: " + data.message, "error");
@@ -347,6 +480,7 @@ async function startSync() {
 
   es.onerror = () => {
     es.close();
+    state.syncStream = null;
     hideSyncBar();
     endSync();
     toast("Lost connection to sync stream.", "error");
@@ -370,6 +504,97 @@ function showSyncBar(message, pct) {
 function hideSyncBar() {
   el("sync-bar").classList.remove("visible");
   el("progress-fill").style.width = "0%";
+}
+
+async function startCrawl() {
+  if (!state.activeAlias) return;
+  if (state.crawling) {
+    await stopCrawl();
+    return;
+  }
+  state.crawling = true;
+
+  renderStats();
+  showSyncBar("Expanding network (Discovery)…", 0);
+
+  try {
+    await api(`/api/sync/${state.activeAlias}/crawl`, { method: "POST" });
+  } catch (e) {
+    if (e.status !== 409) {
+        logError("startCrawl failed:", e);
+        toast(e.message, "error");
+        state.crawling = false;
+        renderStats();
+        return;
+    }
+    toast("Crawl already in progress, attaching to stream...");
+  }
+
+  attachCrawlStream();
+}
+
+function attachCrawlStream() {
+  if (state.crawlStream) {
+    state.crawlStream.close();
+  }
+
+  const es = new EventSource(`/api/sync/${state.activeAlias}/stream?operation=crawl`);
+  state.crawlStream = es;
+  es.onmessage = (evt) => {
+    const data = JSON.parse(evt.data);
+    if (data.kind === "progress" || data.kind === "phase") {
+      showSyncBar(data.message, data.pct ?? null);
+      // Refresh stats to show "Discovered" count increasing in real-time
+      fetchStats();
+      fetchUsers();
+    } else if (data.kind === "done") {
+      es.close();
+      state.crawlStream = null;
+      showSyncBar("Crawl complete!", 100);
+      setTimeout(() => {
+        hideSyncBar();
+        state.crawling = false;
+        renderStats();
+        refresh();
+        toast("Network expansion complete!");
+      }, 800);
+    } else if (data.kind === "error") {
+      es.close();
+      state.crawlStream = null;
+      hideSyncBar();
+      state.crawling = false;
+      renderStats();
+      toast("Crawl error: " + data.message, "error");
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    state.crawlStream = null;
+    hideSyncBar();
+    state.crawling = false;
+    renderStats();
+    toast("Lost connection to crawl stream.", "error");
+  };
+}
+
+async function stopCrawl() {
+  if (!state.activeAlias) return;
+  try {
+    await api(`/api/sync/${state.activeAlias}/crawl/stop`, { method: "POST" });
+    toast("Crawl stopped.");
+  } catch (e) {
+    logError("stopCrawl failed:", e);
+    toast(e.message, "error");
+  } finally {
+    if (state.crawlStream) {
+      state.crawlStream.close();
+      state.crawlStream = null;
+    }
+    state.crawling = false;
+    hideSyncBar();
+    renderStats();
+  }
 }
 
 // ── Add Account modal ─────────────────────────────────────────────────────────
@@ -405,6 +630,7 @@ async function submitAddAccount() {
     await loadAccounts();
     if (!state.activeAlias) switchAccount(alias);
   } catch (e) {
+    logError("submitAddAccount failed:", e);
     toast(e.message, "error");
   }
 }
@@ -470,4 +696,5 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("DOMContentLoaded", () => {
   renderSortControls();
   loadAccounts();
+  startStatusWatcher();
 });

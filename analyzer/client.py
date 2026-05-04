@@ -162,6 +162,9 @@ class BskyClient:
     async def get_profile(self, actor: str):
         return await self._run(lambda: self._client.get_profile(actor=actor))
 
+    async def get_profiles(self, actors: list[str]):
+        return await self._run(lambda: self._client.get_profiles(actors=actors))
+
     async def get_follows(self, actor: str, limit: int = 100, cursor: str | None = None):
         return await self._run(
             lambda: self._client.get_follows(actor=actor, limit=limit, cursor=cursor)
@@ -172,7 +175,7 @@ class BskyClient:
             lambda: self._client.get_followers(actor=actor, limit=limit, cursor=cursor)
         )
 
-    async def get_author_feed(self, actor: str, limit: int = 20):
+    async def get_author_feed(self, actor: str, limit: int = 100):
         return await self._run(
             lambda: self._client.get_author_feed(actor=actor, limit=limit)
         )

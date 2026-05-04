@@ -11,7 +11,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
+import sqlite3
 import threading
 import webbrowser
 from contextlib import asynccontextmanager
@@ -27,6 +29,9 @@ from tortoise.contrib.fastapi import RegisterTortoise
 from api.accounts import router as accounts_router
 from api.sync import router as sync_router
 from api.users import router as users_router
+from api.filters import router as filters_router
+import analyzer.worker as worker_module
+from analyzer.manager import running_tasks
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -39,6 +44,31 @@ logger = logging.getLogger(__name__)
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
 DB_PATH  = BASE_DIR / "data.db"
+
+
+def ensure_sqlite_compat_columns() -> None:
+    """Small no-migration safety net until Aerich migrations are introduced."""
+    if not DB_PATH.exists():
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(crawl_queue_items)").fetchall()
+        }
+        additions = {
+            "cursor": "TEXT",
+            "pages_fetched": "INTEGER NOT NULL DEFAULT 0",
+            "edges_found": "INTEGER NOT NULL DEFAULT 0",
+            "hydrated_at": "TIMESTAMP NULL",
+        }
+        for name, sql_type in additions.items():
+            if columns and name not in columns:
+                conn.execute(f"ALTER TABLE crawl_queue_items ADD COLUMN {name} {sql_type}")
+        conn.commit()
+    finally:
+        conn.close()
 
 # ── Tortoise ORM config ───────────────────────────────────────────────────────
 TORTOISE_CONFIG = {
@@ -64,6 +94,7 @@ async def lifespan(app: FastAPI):
         generate_schemas=True,
         add_exception_handlers=True,
     ):
+        ensure_sqlite_compat_columns()
         logger.info(f"Database ready at {DB_PATH}")
 
         # Sync accounts.json -> DB on every startup so manually edited
@@ -79,7 +110,31 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not sync accounts.json to DB: {e}")
 
-        yield  # server runs here
+        # Start background automation worker
+        await worker_module.start_background_worker()
+
+        try:
+            yield
+        finally:
+            logger.info("Shutting down background tasks...")
+            tasks = []
+            if worker_module.worker_task:
+                worker_module.worker_task.cancel()
+                tasks.append(worker_module.worker_task)
+            
+            for alias, task in list(running_tasks.items()):
+                logger.info(f"Cancelling task for {alias}")
+                task.cancel()
+                tasks.append(task)
+            
+            if tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True),
+                        timeout=5.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Timed out waiting for background tasks to cancel.")
 
     logger.info("Database connections closed.")
 
@@ -104,6 +159,25 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 app.include_router(accounts_router)
 app.include_router(sync_router)
 app.include_router(users_router)
+app.include_router(filters_router)
+
+# ── Client logging ────────────────────────────────────────────────────────────
+@app.post("/api/client-log")
+async def client_log(request: Request):
+    """Endpoint for the frontend to report errors back to the terminal."""
+    try:
+        data = await request.json()
+        level = data.get("level", "info")
+        message = data.get("message", "No message")
+        context = data.get("context", {})
+        log_msg = f"[Frontend] {message} | Context: {context}"
+        if level == "error":
+            logger.error(log_msg)
+        else:
+            logger.info(log_msg)
+    except Exception:
+        pass
+    return {"status": "ok"}
 
 # ── Page route ────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
@@ -140,7 +214,9 @@ def main():
     logger.info(f"Starting Bluesky Analyzer at {url}")
 
     if not args.no_browser:
-        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+        opener = threading.Timer(1.5, lambda: webbrowser.open(url))
+        opener.daemon = True
+        opener.start()
 
     uvicorn.run(
         "main:app",
