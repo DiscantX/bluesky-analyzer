@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import AsyncGenerator
 
 from analyzer.client import BskyClient
 from analyzer.fetch import fetch_all_follows, fetch_all_followers, fetch_feeds_concurrent, fetch_profiles_detailed
 from analyzer.analyze import build_tracked_user_data
-from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge
+from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge, Profile
 from db.profile_store import upsert_profile_relationship
 from analyzer.manager import bus
 from analyzer.metrics import run_graph_analysis
@@ -28,11 +28,89 @@ FEED_SAMPLE_SIZE = 100         # app.bsky.feed.getAuthorFeed max page size
 INACTIVE_DAYS = 90
 REPOST_THRESHOLD = 0.70
 
+# Staleness thresholds for differential syncing
+# High-priority accounts refresh more frequently than low-priority stubs
+STALENESS_THRESHOLDS = {
+    2: timedelta(days=3),    # Tier 2 (full): refresh every 3 days
+    1: timedelta(days=7),    # Tier 1 (standard): refresh every 7 days (default)
+    0: timedelta(days=30),   # Tier 0 (stub): refresh every 30 days
+}
+# Accounts without a crawl_tier default to tier 1 staleness (7 days)
+DEFAULT_STALENESS = STALENESS_THRESHOLDS[1]
+
 
 # ── Progress event helpers ─────────────────────────────────────────────────────
 
 def _evt(kind: str, **kwargs) -> dict:
     return {"kind": kind, "ts": datetime.now(timezone.utc).isoformat(), **kwargs}
+
+
+async def _get_staleness_threshold(rel: AccountRelationship) -> timedelta:
+    """
+    Determine staleness threshold based on crawl_tier.
+    High-priority accounts (tier 2) refresh more frequently.
+    """
+    return STALENESS_THRESHOLDS.get(rel.crawl_tier, DEFAULT_STALENESS)
+
+
+async def _filter_stale_accounts(
+    saved_account: SavedAccount,
+    all_dids: list[str],
+) -> tuple[list[str], list[str]]:
+    """
+    Partition DIDs into (needs_analysis, can_skip) based on staleness.
+    
+    An account can be skipped if:
+    - last_analyzed_at is set AND
+    - (now - last_analyzed_at) < staleness_threshold for its tier
+    
+    Returns: (dids_to_analyze, dids_to_skip)
+    """
+    now = datetime.now(timezone.utc)
+    
+    # Fetch existing relationships for all DIDs
+    relationships = await AccountRelationship.filter(
+        owner=saved_account,
+        did__in=all_dids,
+    ).prefetch_related("profile").all()
+    
+    rel_by_did = {rel.did: rel for rel in relationships}
+    
+    to_analyze = []
+    skipped = 0
+    
+    for did in all_dids:
+        rel = rel_by_did.get(did)
+        
+        # New accounts (not yet tracked) always need analysis
+        if not rel:
+            to_analyze.append(did)
+            continue
+        
+        # Accounts with no analysis history always need analysis
+        if not rel.profile or not rel.profile.last_analyzed_at:
+            to_analyze.append(did)
+            continue
+        
+        # Check staleness threshold
+        threshold = await _get_staleness_threshold(rel)
+        time_since_analysis = now - rel.profile.last_analyzed_at
+        
+        if time_since_analysis > threshold:
+            # Stale — needs refresh
+            to_analyze.append(did)
+        else:
+            # Fresh — can skip
+            skipped += 1
+    
+    logger.info(
+        f"Staleness filter: {len(to_analyze)} to analyze, {skipped} skipped "
+        f"(threshold: tier2={STALENESS_THRESHOLDS[2].days}d, "
+        f"tier1={STALENESS_THRESHOLDS[1].days}d, tier0={STALENESS_THRESHOLDS[0].days}d)"
+    )
+    
+    return to_analyze, [d for d in all_dids if d not in to_analyze]
+
 
 
 # ── Main sync entry point ──────────────────────────────────────────────────────
@@ -100,20 +178,31 @@ async def run_sync(
         for dp in detailed_profiles:
             profile_map[dp.did] = dp
 
+        # ── 2.6 Filter stale accounts to avoid wasteful re-analysis ───────────
+        # Skip accounts that were analyzed recently (within their tier's threshold)
+        dids_to_analyze, dids_to_skip = await _filter_stale_accounts(saved_account, all_dids)
+        
+        if dids_to_skip:
+            await emit(
+                "phase",
+                message=f"Skipping {len(dids_to_skip)} recently-analysed accounts…",
+            )
+
         await emit(
             "phase",
-            message=f"Analysing {total} accounts…",
+            message=f"Analysing {len(dids_to_analyze)} accounts…",
             follows=len(follows),
             followers=len(followers),
             total=total,
+            skipped=len(dids_to_skip),
         )
 
-        # ── 3. Fetch feeds concurrently and upsert ─────────────────────────────
+        # ── 3. Fetch feeds concurrently and upsert (only for stale accounts) ───
         completed = 0
 
         async for did, feed_items in fetch_feeds_concurrent(
             client,
-            all_dids,
+            dids_to_analyze,
             limit_per_actor=FEED_SAMPLE_SIZE,
         ):
             completed += 1
@@ -132,14 +221,14 @@ async def run_sync(
 
             await upsert_profile_relationship(saved_account, data)
 
-            if completed % 10 == 0 or completed == total:
-                pct = int(completed / total * 100)
+            if completed % 10 == 0 or completed == len(dids_to_analyze):
+                pct = int(completed / len(dids_to_analyze) * 100) if dids_to_analyze else 100
                 await emit(
                     "progress",
                     completed=completed,
-                    total=total,
+                    total=len(dids_to_analyze),
                     pct=pct,
-                    message=f"Analysed {completed}/{total} accounts ({pct}%)",
+                    message=f"Analysed {completed}/{len(dids_to_analyze)} accounts ({pct}%)",
                 )
 
         # ── 4. Mark accounts no longer in follows/followers as stale ──────────
