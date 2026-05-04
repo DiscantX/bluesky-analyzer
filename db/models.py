@@ -219,3 +219,15 @@ class FilterSet(Model):
 
     def __str__(self):
         return f"Filter: {self.name}"
+
+class CustomVariable(Model):
+    """A named mathematical expression that can be reused in filters."""
+    id = fields.IntField(pk=True)
+    owner = fields.ForeignKeyField("models.SavedAccount", related_name="custom_variables")
+    name = fields.CharField(max_length=64)
+    # JSON representation of the math tree (left_field, extra_terms)
+    expression_tree = fields.TextField()
+
+    class Meta:
+        table = "custom_variables"
+        unique_together = (("owner", "name"),)

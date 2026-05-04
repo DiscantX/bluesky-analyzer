@@ -39,17 +39,12 @@ SORTABLE_FIELDS = {
 FILTERABLE_FLAGS = {
     "i_follow_them": "r.i_follow_them",
     "they_follow_me": "r.they_follow_me",
-    "is_inactive": "p.is_inactive",
-    "is_repost_heavy": "p.is_repost_heavy",
     "is_one_sided_follow": "r.is_one_sided_follow",
     "is_follower_only": "r.is_follower_only",
     "interacted_with_owner": "r.interacted_with_owner",
     "muted": "r.muted",
     "blocked": "r.blocked",
     "is_stub": "r.crawl_tier", # Special handling for is_stub
-    "crawl_tier": "r.crawl_tier",
-    "community_id": "r.community_id",
-    "discovered_via": "r.discovered_via",
 }
 
 FILTERABLE_FIELDS_MAP = {
@@ -62,15 +57,12 @@ FILTERABLE_FIELDS_MAP = {
     "is_one_sided_follow": "r.is_one_sided_follow",
     "is_follower_only": "r.is_follower_only",
     # Boolean flags (from Profile)
-    "is_inactive": "p.is_inactive",
-    "is_repost_heavy": "p.is_repost_heavy",
 
     # Numeric fields (from Profile)
     "followers_count": "p.followers_count",
     "follows_count": "p.follows_count",
     "posts_count": "p.posts_count",
     "days_since_post": "p.days_since_post",
-    "repost_ratio": "p.repost_ratio",
     "sampled_post_count": "p.sampled_post_count",
     "repost_count": "p.repost_count",
     "original_post_count": "p.original_post_count",
@@ -142,11 +134,63 @@ def _bool_param(value: bool) -> int:
     return 1 if value else 0
 
 
-def _build_recursive_where_clause(condition_tree: dict, params: list[Any]) -> str:
+async def _resolve_field_sql(field_name: str, owner_id: int) -> str | None:
+    """Resolves a field name to SQL, checking hardcoded map then Custom Variables."""
+    # 1. Check hardcoded columns
+    col = FILTERABLE_FIELDS_MAP.get(field_name)
+    if col:
+        return col
+
+    # 2. Check Custom Variables
+    from db.models import CustomVariable
+    var = await CustomVariable.get_or_none(owner_id=owner_id, name=field_name)
+    if var:
+        tree = json.loads(var.expression_tree)
+        return await _build_math_sql(tree, owner_id)
+    
+    return None
+
+
+async def _build_math_sql(cond: dict, owner_id: int) -> str | None:
+    """Helper to build math expressions from a node."""
+    left_field = cond.get("left_field") or cond.get("numerator")
+    extra_terms = cond.get("extra_terms")
+
+    # Legacy support
+    if left_field and extra_terms is None:
+        math_op = cond.get("math_op") or ("div" if cond.get("denominator") else None)
+        right_field = cond.get("right_field") or cond.get("denominator")
+        if math_op and right_field:
+            extra_terms = [{"op": math_op, "field": right_field}]
+
+    if not left_field or not extra_terms:
+        return None
+
+    col_left = await _resolve_field_sql(left_field, owner_id)
+    if not col_left:
+        return None
+
+    expr_sql = col_left
+    for term in extra_terms:
+        t_op = term.get("op")
+        t_field = term.get("field")
+        col_right = await _resolve_field_sql(t_field, owner_id)
+        if not col_right:
+            return None
+        
+        if t_op == "add": expr_sql = f"({expr_sql} + {col_right})"
+        elif t_op == "sub": expr_sql = f"({expr_sql} - {col_right})"
+        elif t_op == "mul": expr_sql = f"({expr_sql} * {col_right})"
+        elif t_op == "div": expr_sql = f"(1.0 * {expr_sql} / NULLIF({col_right}, 0))"
+        elif t_op == "mod": expr_sql = f"({expr_sql} % NULLIF({col_right}, 0))"
+        elif t_op == "pow": expr_sql = f"POWER({expr_sql}, {col_right})"
+    
+    return expr_sql
+
+
+async def _build_recursive_where_clause(condition_tree: dict, params: list[Any], owner_id: int) -> str:
     """
     Recursively translates a FilterSet JSON tree into SQL.
-    Structure: {"op": "AND"|"OR", "conditions": [rule|group]}
-    Rule: {"field": "...", "op": "...", "value": ...}
     """
     op = condition_tree.get("op", "AND").upper()
     conditions = condition_tree.get("conditions", [])
@@ -158,57 +202,39 @@ def _build_recursive_where_clause(condition_tree: dict, params: list[Any]) -> st
     for cond in conditions:
         # Nested logic group
         if "op" in cond and "conditions" in cond:
-            parts.append(f"({_build_recursive_where_clause(cond, params)})")
+            parts.append(f"({await _build_recursive_where_clause(cond, params, owner_id)})")
+            continue
+
+        # Member of Filter logic
+        if cond.get("field") == "__member__":
+            filter_id = cond.get("value")
+            from db.models import FilterSet
+            target_fs = await FilterSet.get_or_none(id=filter_id, owner_id=owner_id)
+            if target_fs:
+                sub_params = []
+                sub_where = await _build_recursive_where_clause(json.loads(target_fs.condition_tree), sub_params, owner_id)
+                sub_sql = f"r.did IN (SELECT p2.did FROM account_relationships r2 JOIN profiles p2 ON p2.id = r2.profile_id WHERE r2.owner_id = {owner_id} AND {sub_where.replace('?', '%PARAM%')})"
+                # Tortoise doesn't easily nested parameters this way, so we manually interpolate sub_params
+                for p in sub_params:
+                    val = f"'{p}'" if isinstance(p, str) else str(p)
+                    sub_sql = sub_sql.replace("%PARAM%", val, 1)
+                parts.append(sub_sql)
             continue
 
         # Leaf condition
         field = cond.get("field")
         cond_op = cond.get("op")
         value = cond.get("value")
-
-        # Mathematical Expression Logic (A op B op C ...)
-        left_field = cond.get("left_field") or cond.get("numerator")
-        extra_terms = cond.get("extra_terms")
-
-        # Legacy support for A op B structure
-        if left_field and extra_terms is None:
-            math_op = cond.get("math_op") or ("div" if cond.get("denominator") else None)
-            right_field = cond.get("right_field") or cond.get("denominator")
-            if math_op and right_field:
-                extra_terms = [{"op": math_op, "field": right_field}]
-
-        is_math_expr = left_field and extra_terms
+        
+        # Resolve column (could be raw column or math expr)
+        is_math_expr = (cond.get("left_field") or cond.get("numerator")) is not None
         if is_math_expr:
-            col_left = FILTERABLE_FIELDS_MAP.get(left_field)
-            if not col_left:
-                continue
-
-            expr_sql = col_left
-            valid_expr = True
-            for term in extra_terms:
-                t_op = term.get("op")
-                t_field = term.get("field")
-                col_right = FILTERABLE_FIELDS_MAP.get(t_field)
-                if not col_right:
-                    valid_expr = False
-                    break
-                if t_op == "add": expr_sql = f"({expr_sql} + {col_right})"
-                elif t_op == "sub": expr_sql = f"({expr_sql} - {col_right})"
-                elif t_op == "mul": expr_sql = f"({expr_sql} * {col_right})"
-                elif t_op == "div": expr_sql = f"(1.0 * {expr_sql} / NULLIF({col_right}, 0))"
-                elif t_op == "mod": expr_sql = f"({expr_sql} % NULLIF({col_right}, 0))"
-                elif t_op == "pow": expr_sql = f"POWER({expr_sql}, {col_right})"
-                else:
-                    valid_expr = False
-                    break
-            if valid_expr:
-                column = expr_sql
-            else:
-                continue
+            column = await _build_math_sql(cond, owner_id)
         else:
-            column = FILTERABLE_FIELDS_MAP.get(field)
-            if not column:
-                continue
+            column = await _resolve_field_sql(field, owner_id)
+
+        if not column:
+            continue
 
         # Coerce values for known boolean fields (FILTERABLE_FLAGS contains the bool keys)
         if not is_math_expr and field in FILTERABLE_FLAGS:
@@ -264,7 +290,7 @@ def _build_recursive_where_clause(condition_tree: dict, params: list[Any]) -> st
     return f" {op} ".join(parts)
 
 
-def _where(
+async def _where(
     owner_id: int,
     *,
     search: str | None = None,
@@ -305,7 +331,7 @@ def _where(
     if filter_tree:
         if isinstance(filter_tree, str):
             filter_tree = json.loads(filter_tree)
-        clauses.append(f"({_build_recursive_where_clause(filter_tree, params)})")
+        clauses.append(f"({await _build_recursive_where_clause(filter_tree, params, owner_id)})")
         return " AND ".join(clauses), params
 
     if flags:
@@ -431,7 +457,7 @@ async def query_users(
     limit: int = 200,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
-    where_sql, params = _where(
+    where_sql, params = await _where(
         owner_id,
         search=search,
         flags=flags,

@@ -14,6 +14,7 @@ const state = {
   crawlStream: null,
   statusTimer: null,
   customFilters: [],
+  variables: [],
   lastUserFetch: 0,
   settings: {},
 
@@ -102,7 +103,7 @@ const SORT_OPTIONS = [
   { value: "first_seen_at",   label: "First Seen" },
 ];
 
-const FILTER_FIELDS = {
+const BASE_FILTER_FIELDS = {
   "i_follow_them": { label: "I Follow Them", type: "boolean" },
   "they_follow_me": { label: "They Follow Me", type: "boolean" },
   "is_inactive": { label: "Inactive", type: "boolean" },
@@ -114,8 +115,16 @@ const FILTER_FIELDS = {
   "community_id": { label: "Community ID", type: "number" },
   "handle": { label: "Handle", type: "string" },
   "display_name": { label: "Name", type: "string" },
-  "__math__": { label: "Math Expression (A op B)...", type: "math" },
 };
+
+let FILTER_FIELDS = { ...BASE_FILTER_FIELDS };
+
+const MATH_OPS = [
+  { val: "add", label: "+" },
+  { val: "sub", label: "−" },
+  { val: "mul", label: "×" },
+  { val: "div", label: "÷" }
+];
 
 const OPERATORS_BY_TYPE = {
   "boolean": [{ val: "eq", label: "is" }],
@@ -124,25 +133,21 @@ const OPERATORS_BY_TYPE = {
     { val: "gt", label: ">" }, { val: "gte", label: "≥" },
     { val: "lt", label: "<" }, { val: "lte", label: "≤" }
   ],
+  "string": [
+    { val: "eq", label: "is" }, { val: "contains", label: "contains" },
+    { val: "starts_with", label: "starts with" }
+  ],
   "math": [
     { val: "eq", label: "=" }, { val: "neq", label: "≠" },
     { val: "gt", label: ">" }, { val: "gte", label: "≥" },
     { val: "lt", label: "<" }, { val: "lte", label: "≤" }
   ],
-  "string": [
-    { val: "eq", label: "is" }, { val: "contains", label: "contains" },
-    { val: "starts_with", label: "starts with" }
+  "variable": [
+    { val: "eq", label: "=" }, { val: "neq", label: "≠" },
+    { val: "gt", label: ">" }, { val: "gte", label: "≥" },
+    { val: "lt", label: "<" }, { val: "lte", label: "≤" }
   ]
 };
-
-const MATH_OPS = [
-  { val: "add", label: "+" },
-  { val: "sub", label: "-" },
-  { val: "mul", label: "×" },
-  { val: "div", label: "/" },
-  { val: "mod", label: "%" },
-  { val: "pow", label: "^" },
-];
 
 let builderState = {
   name: "",
@@ -150,6 +155,12 @@ let builderState = {
   id: null, // New: to track if we're editing an existing filter
   color: "#3b82f6",
   tree: { id: "root", op: "AND", conditions: [] }
+};
+
+let variableEditorState = {
+  isOpen: false,
+  editingVariableId: null,
+  editingExpression: null
 };
 
 // ── API helpers ───────────────────────────────────────────────────────────────
@@ -292,6 +303,7 @@ function renderCustomFilters() {
       <button class="btn-mini btn-ghost" onclick="editFilterSet(event, ${f.id})" style="margin-left:auto; border:none; opacity:0.4">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
       </button>
+      <button class="btn-mini btn-ghost" onclick="deleteFilterSet(event, ${f.id})" style="margin-left:auto; border:none; opacity:0.4">×</button>
     </div>
   `).join("");
 }
@@ -926,13 +938,12 @@ function toast(message, type = "info") {
 }
 
 // ── Filter Builder Logic ──────────────────────────────────────────────────────
-function openFilterBuilder(isEdit = false) {
+function openFilterBuilder() {
   // Reset builderState for a new filter, or populate if editing
-  if (!isEdit) {
+  if (!builderState.id) { // If no ID, it's a new filter
     builderState = { name: "", icon: "🔍", color: "#3b82f6", id: null, tree: { id: "root", op: "AND", conditions: [] } };
   }
 
-  el("filter-delete-btn").style.display = builderState.id ? "inline-flex" : "none";
   el("filter-name").value = builderState.name;
   el("filter-icon").value = builderState.icon;
   el("filter-color").value = builderState.color;
@@ -945,7 +956,7 @@ function editFilterSet(e, id) {
   const f = state.customFilters.find(x => x.id === id);
   if (!f) return;
   builderState = { name: f.name, icon: f.icon, color: f.color, id: f.id, tree: typeof f.condition_tree === 'string' ? JSON.parse(f.condition_tree) : f.condition_tree };
-  openFilterBuilder(true);
+  openFilterBuilder();
 }
 
 function closeFilterBuilder() { el("filter-modal").classList.remove("open"); }
@@ -964,6 +975,7 @@ function renderGroup(group) {
           <option value="OR" ${group.op === 'OR' ? 'selected' : ''}>OR</option>
         </select>
         <button class="btn btn-ghost btn-mini" onclick="addRule('${group.id}')">+ Rule</button>
+        <button class="btn btn-ghost btn-mini" onclick="addMathExpressionRule('${group.id}')" title="Create math expression">+ Math</button>
         <button class="btn btn-ghost btn-mini" onclick="addGroup('${group.id}')">+ Group</button>
         ${group.id !== 'root' ? `<button class="btn btn-danger btn-mini" onclick="removeNode('${group.id}')">×</button>` : ''}
       </div>
@@ -976,14 +988,47 @@ function renderGroup(group) {
 function renderRule(rule, groupId) {
   const fieldDef = FILTER_FIELDS[rule.field] || { type: "string" };
   const ops = OPERATORS_BY_TYPE[fieldDef.type] || [];
+   // ── Member of Filter Logic ──
+  if (fieldDef.type === 'member') {
+    const filterOpts = state.customFilters.map(f => `<option value="${f.id}" ${rule.value == f.id ? 'selected' : ''}>${f.icon} ${f.name}</option>`).join("");
+    return `
+      <div class="builder-rule" data-id="${rule.id}">
+        <select class="rule-field" onchange="updateRule('${rule.id}', 'field', this.value)">
+          ${Object.entries(FILTER_FIELDS).map(([k,v]) => `<option value="${k}" ${rule.field === k ? 'selected' : ''}>${v.label}</option>`).join("")}
+        </select>
+        <select class="rule-value" onchange="updateRule('${rule.id}', 'value', Number(this.value))" style="flex:1">
+          <option value="">Select a Filter...</option>
+          ${filterOpts}
+        </select>
+        <button class="btn btn-ghost btn-mini" onclick="removeNode('${rule.id}')">×</button>
+      </div>`;
+  }
 
-  if (fieldDef.type === 'math') {
-    const subFields = Object.entries(FILTER_FIELDS).filter(([k, v]) => v.type === "number");
+  // ── Variable (Saved Expression) Logic ──
+  if (fieldDef.type === 'variable') {
+    const variable = state.variables.find(v => v.name === rule.field);
+    return `
+      <div class="builder-rule" data-id="${rule.id}">
+        <div style="display: inline-block; background: var(--accent2); color: white; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.85rem;">
+          ${rule.field}
+        </div>
+        <button class="btn btn-ghost btn-mini" onclick="openVariableEditor(${variable?.id || 'null'}, '${rule.id}')" title="Edit expression">✏️</button>
+        <select class="rule-op" onchange="updateRule('${rule.id}', 'op', this.value)">
+          ${ops.map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
+        </select>
+        <input class="rule-value" type="number" step="0.01" value="${rule.value || ''}"
+               oninput="updateRule('${rule.id}', 'value', Number(this.value))">
+        <button class="btn btn-ghost btn-mini" onclick="removeNode('${rule.id}')">×</button>
+      </div>`;
+  }
+
+  // ── Math Expression Logic ──
+  if (fieldDef.type === 'math' || rule.field === '__math__') {
+    const subFields = Object.entries(FILTER_FIELDS).filter(([k, v]) => v.type === "number" || v.type === "variable");
     const leftOpts = subFields.map(([k, v]) => `<option value="${k}" ${rule.left_field === k ? 'selected' : ''}>${v.label}</option>`).join("");
 
-    // Backward compatibility for legacy A op B structure
     if (!rule.extra_terms) {
-      rule.extra_terms = [{ op: rule.math_op || "div", field: rule.right_field || "follows_count" }];
+      rule.extra_terms = [{ op: "div", field: "follows_count" }];
     }
 
     const termsHtml = rule.extra_terms.map((term, idx) => {
@@ -1002,9 +1047,7 @@ function renderRule(rule, groupId) {
 
     return `
       <div class="builder-rule" data-id="${rule.id}" style="flex-wrap: wrap;">
-        <select class="rule-field" onchange="updateRule('${rule.id}', 'field', this.value)">
-          ${Object.entries(FILTER_FIELDS).map(([k,v]) => `<option value="${k}" ${rule.field === k ? 'selected' : ''}>${v.label}</option>`).join("")}
-        </select>
+        <button class="btn btn-ghost btn-mini" onclick="prepareVariableSave('${rule.id}')" title="Save as Variable">💾</button>
         <select class="rule-field" style="width:110px" onchange="updateRule('${rule.id}', 'left_field', this.value)">
           ${leftOpts}
         </select>
@@ -1013,8 +1056,7 @@ function renderRule(rule, groupId) {
         <select class="rule-op" onchange="updateRule('${rule.id}', 'op', this.value)">
           ${ops.map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
         </select>
-        <input class="rule-value" type="number" step="0.01" 
-               value="${rule.value || ''}"
+        <input class="rule-value" type="number" step="0.01" value="${rule.value || ''}"
                oninput="updateRule('${rule.id}', 'value', Number(this.value))">
         <button class="btn btn-ghost btn-mini" onclick="removeNode('${rule.id}')">×</button>
       </div>`;
@@ -1049,33 +1091,22 @@ function findNode(tree, id) {
   return null;
 }
 
-function addMathTerm(id) {
-  const node = findNode(builderState.tree, id);
-  if (!node.extra_terms) {
-    node.extra_terms = [{ op: node.math_op || "div", field: node.right_field || "follows_count" }];
-  }
-  node.extra_terms.push({ op: "add", field: "posts_count" });
-  renderBuilder();
-}
-
-function removeMathTerm(id, idx) {
-  const node = findNode(builderState.tree, id);
-  if (node.extra_terms && node.extra_terms.length > 1) {
-    node.extra_terms.splice(idx, 1);
-    renderBuilder();
-  }
-}
-
-function updateMathTerm(id, idx, key, val) {
-  const node = findNode(builderState.tree, id);
-  if (node.extra_terms && node.extra_terms[idx]) {
-    node.extra_terms[idx][key] = val;
-  }
-}
-
 function addRule(groupId) {
   const group = findNode(builderState.tree, groupId);
   group.conditions.push({ id: Math.random().toString(36).substr(2, 9), field: "handle", op: "contains", value: "" });
+  renderBuilder();
+}
+
+function addMathExpressionRule(groupId) {
+  const group = findNode(builderState.tree, groupId);
+  group.conditions.push({
+    id: Math.random().toString(36).substr(2, 9),
+    field: "__math__",
+    left_field: "followers_count",
+    extra_terms: [{ op: "div", field: "follows_count" }],
+    op: "lt",
+    value: 0.5
+  });
   renderBuilder();
 }
 
@@ -1101,9 +1132,11 @@ function updateRule(id, key, val) {
     const fieldDef = FILTER_FIELDS[val] || { type: "string" };
     node.op = 'eq';
     // Initialize value with type-appropriate defaults
-    if (fieldDef.type === 'boolean') node.value = true;
-    else if (fieldDef.type === 'number') node.value = 0;
-    else if (fieldDef.type === 'math') {
+    if (fieldDef.type === 'boolean') {
+      node.value = true;
+    } else if (fieldDef.type === 'number' || fieldDef.type === 'variable') {
+      node.value = 0;
+    } else if (fieldDef.type === 'math') {
       node.left_field = "followers_count";
       node.extra_terms = [{ op: "div", field: "follows_count" }];
       node.op = "lt";
@@ -1116,6 +1149,88 @@ function updateRule(id, key, val) {
 }
 
 function updateGroupOp(id, op) { findNode(builderState.tree, id).op = op; }
+
+function updateMathTerm(ruleId, termIdx, key, val) {
+  const node = findNode(builderState.tree, ruleId);
+  if (node.extra_terms && node.extra_terms[termIdx]) {
+    node.extra_terms[termIdx][key] = val;
+    renderBuilder();
+  }
+}
+
+function addMathTerm(ruleId) {
+  const node = findNode(builderState.tree, ruleId);
+  if (node.extra_terms) {
+    node.extra_terms.push({ op: "mul", field: "followers_count" });
+    renderBuilder();
+  }
+}
+
+function removeMathTerm(ruleId, termIdx) {
+  const node = findNode(builderState.tree, ruleId);
+  if (node.extra_terms && node.extra_terms.length > 1) {
+    node.extra_terms.splice(termIdx, 1);
+    renderBuilder();
+  }
+}
+
+function toggleExpandVariable(ruleId) {
+  const el_rule = document.querySelector(`[data-id="${ruleId}"]`);
+  if (el_rule) {
+    el_rule.classList.toggle("expanded-variable");
+    renderBuilder();
+  }
+}
+
+function openVariableEditor(variableId, ruleId) {
+  const variable = state.variables.find(v => v.id === variableId);
+  if (!variable) return;
+
+  try {
+    const expr = JSON.parse(variable.expression_tree);
+    variableEditorState.isOpen = true;
+    variableEditorState.editingVariableId = variableId;
+    variableEditorState.editingExpression = expr;
+
+    el("var-editor-name").textContent = variable.name;
+    
+    const exprDesc = `${expr.left_field || 'field'} ${expr.extra_terms?.map(t => `${t.op} ${t.field}`).join(' ') || ''}`.trim();
+    el("variable-expression-display").textContent = exprDesc || "(empty expression)";
+    el("variable-editor-panel").style.display = "block";
+  } catch (e) {
+    toast("Error loading variable expression", "error");
+  }
+}
+
+function closeVariableEditor() {
+  variableEditorState.isOpen = false;
+  variableEditorState.editingVariableId = null;
+  variableEditorState.editingExpression = null;
+  el("variable-editor-panel").style.display = "none";
+}
+
+function saveVariableEdits() {
+  if (!variableEditorState.editingVariableId || !variableEditorState.editingExpression) return;
+  
+  const variable = state.variables.find(v => v.id === variableEditorState.editingVariableId);
+  if (!variable) return;
+
+  const payload = {
+    name: variable.name,
+    expression_tree: JSON.stringify(variableEditorState.editingExpression)
+  };
+
+  api(`/api/filters/${state.activeAlias}/variables/${variableEditorState.editingVariableId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  }).then(() => {
+    toast(`Variable "${variable.name}" updated`);
+    closeVariableEditor();
+    loadVariables();
+  }).catch(e => {
+    toast("Error saving variable: " + e.message, "error");
+  });
+}
 
 async function saveFilterSet() {
   const name = el("filter-name").value.trim();
@@ -1142,17 +1257,111 @@ async function loadFilterSets() {
   renderCustomFilters();
 }
 
-async function handleDeleteInBuilder() {
-  if (!builderState.id) return;
+async function deleteFilterSet(e, id) {
+  e.stopPropagation();
   if (!confirm("Delete this filter?")) return;
-  try {
-    await api(`/api/filters/${state.activeAlias}/${builderState.id}`, { method: "DELETE" });
-    closeFilterBuilder();
-    await loadFilterSets();
-  } catch (e) {
-    logError("Delete filter failed:", e);
-    toast(e.message, "error");
+  await api(`/api/filters/${state.activeAlias}/${id}`, { method: "DELETE" });
+  await loadFilterSets();
+}
+
+// ── Variable Management ──────────────────────────────────────────────────────
+let currentMathExpressionForVar = null;
+
+function updateFilterFieldsWithVariables() {
+  FILTER_FIELDS = { ...BASE_FILTER_FIELDS };
+  if (state.variables && Array.isArray(state.variables)) {
+    state.variables.forEach(v => {
+      FILTER_FIELDS[v.name] = { label: v.name, type: "variable" };
+    });
   }
+}
+
+async function loadVariables() {
+    if (!state.activeAlias) return;
+    try {
+        state.variables = await api(`/api/filters/${state.activeAlias}/variables`);
+        updateFilterFieldsWithVariables();
+        renderVariableList();
+    } catch (e) {
+        logError("loadVariables failed:", e);
+    }
+}
+
+function renderVariableList() {
+    const list = el("variable-list");
+    const sidebarList = el("custom-variables-list");
+    if (!list) return;
+
+    list.innerHTML = state.variables.map(v => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding: 0.4rem; border-bottom: 1px solid var(--border);">
+            <span style="font-family: var(--mono); font-size: 0.8rem;">${v.name}</span>
+            <button class="btn btn-danger btn-mini" onclick="deleteVariable(${v.id})">Delete</button>
+        </div>
+    `).join("") || '<div class="state-box" style="padding:1rem">No variables yet.</div>';
+
+    if (sidebarList) {
+      sidebarList.innerHTML = state.variables.map(v => `<div>${v.name}</div>`).join("");
+    }
+}
+
+function openVariableManager() { el("variable-modal").classList.add("open"); }
+function closeVariableManager() { el("variable-modal").classList.remove("open"); currentMathExpressionForVar = null; el("var-save-btn").disabled = true; }
+
+function prepareVariableSave(ruleId) {
+    const node = findNode(builderState.tree, ruleId);
+    currentMathExpressionForVar = {
+        left_field: node.left_field,
+        extra_terms: node.extra_terms
+    };
+    el("var-save-btn").disabled = false;
+    openVariableManager();
+    toast("Expression captured. Give it a name to save.");
+}
+
+async function saveCurrentExpressionAsVariable() {
+    const name = el("var-name-input").value.trim().replace(/[^a-zA-Z0-9 ]/g, "").trim();
+    if (!name) return toast("Name required (letters, numbers, and spaces)", "error");
+    if (!currentMathExpressionForVar) return;
+
+    const payload = {
+        name: name,
+        expression_tree: JSON.stringify(currentMathExpressionForVar)
+    };
+
+    await api(`/api/filters/${state.activeAlias}/variables`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+    });
+    
+    el("var-name-input").value = "";
+    await loadVariables();
+    
+    const savedVar = state.variables.find(v => v.name === name);
+    if (savedVar) {
+      addVariableToFilter(savedVar.name);
+    }
+    
+    closeVariableManager();
+    toast(`Variable "${name}" saved!`);
+}
+
+function addVariableToFilter(variableName) {
+  const root = builderState.tree;
+  const newRule = {
+    id: Math.random().toString(36).substr(2, 9),
+    field: variableName,
+    op: "gt",
+    value: 0
+  };
+  root.conditions.push(newRule);
+  renderBuilder();
+  toast(`"${variableName}" added to filter`);
+}
+
+async function deleteVariable(id) {
+    if (!confirm("Delete variable? Filters using it will break.")) return;
+    await api(`/api/filters/${state.activeAlias}/variables/${id}`, { method: "DELETE" });
+    await loadVariables();
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
