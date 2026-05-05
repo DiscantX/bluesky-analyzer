@@ -123,8 +123,8 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
           if (node.type === 'community_meta') {
               return `Community ${node.id} (${node.member_count} members, Avg Rank: ${node.avg_rank.toFixed(5)})`;
           }
-          const truncated = data.metadata.truncated_counts?.[node.did];
-          return `@${node.handle}${truncated ? ` (+${truncated} neighbors)` : ''} (Rank: ${node.rank.toFixed(5)})`;
+          const truncated = data.metadata.truncated_counts?.[node.did]; // Tooltip for ghost nodes
+          return `@${node.handle}${truncated ? ` (+${truncated} neighbors)` : ''} (Rank: ${(node.rank * 1000).toFixed(4)})`;
       })
       .nodeColor(node => {
           if (node.type === 'community_meta') {

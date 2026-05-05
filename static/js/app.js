@@ -264,7 +264,7 @@ function userRow(u) {
         <div class="col-stat">${fmt(u.sampled_post_count)}</div>
         <div class="col-stat">${fmt(u.repost_count)}</div>
         <div class="col-stat">${fmt(u.original_post_count)}</div>
-        <div class="col-stat" title="FlowRank Influence">💎 ${u.flowrank_score > 0 ? (u.flowrank_score * 1000).toFixed(2) : "—"}</div>
+        <div class="col-stat" title="FlowRank Influence">💎 ${u.flowrank_score > 0 ? (u.flowrank_score * 1000).toFixed(4) : "—"}</div>
         <div class="col-stat" title="Community ID">🌐 ${u.community_id != null ? u.community_id : "—"}</div>
         <div class="col-date">${shortDate(u.last_post_at)}</div>
         <div class="col-date">${shortDate(u.last_analyzed_at)}</div>
