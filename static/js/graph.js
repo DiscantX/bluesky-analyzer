@@ -21,8 +21,9 @@ let lastClickedNode = null; // Used for double-click detection
 
 let currentGraphMode = 'macro'; // 'macro', 'community_overview', 'community_detail', 'ego'
 let currentCommunityId = null; // Tracks which community is being viewed in detail
+let showParticles = true; // Global toggle state for flow particles
 
-async function loadGraphData(mode = 'macro', seedDid = null, communityId = null) {
+async function loadGraphData(mode = 'macro', seedDid = null, communityId = null, spawnAt = null) {
   const statusEl = document.getElementById('graph-status');
   const metaEl = document.getElementById('graph-meta');
   const resetBtn = document.getElementById('reset-btn');
@@ -58,6 +59,31 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null)
     currentGraphMode = mode;
     currentCommunityId = communityId;
 
+    if (!graph) {
+      const elem = document.getElementById('graph-container');
+      graph = ForceGraph()(elem);
+    }
+
+    // --- Shattering Logic (Design Doc Tier B) ---
+    // If we have a spawn point, initialize all new nodes at that location
+    // to create the "shatter" expansion effect.
+    const nodes = data.nodes.map(n => {
+        const nodeObj = { ...n, id: n.did || `comm-${n.id}` };
+        if (spawnAt) {
+            nodeObj.x = spawnAt.x;
+            nodeObj.y = spawnAt.y;
+        }
+        return nodeObj;
+    });
+
+    // Memory Safety: Clear existing data arrays before loading new scene
+    graph.graphData({ nodes: [], links: [] });
+
+    const graphData = {
+      nodes: nodes,
+      links: data.links
+    };
+
     // Update UI buttons visibility
     resetBtn.style.display = (mode === 'macro' || mode === 'community_overview') ? 'none' : 'block';
     communityOverviewBtn.style.display = (mode === 'macro' || mode === 'ego') ? 'block' : 'none';
@@ -71,19 +97,8 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null)
 
     metaEl.innerHTML = `Mode: ${modeLabel}<br>Nodes: ${data.metadata.node_count} | Links: ${data.metadata.link_count}`;
     
-    // Display ghost nodes only for ego-graph
     if (mode === 'ego' && data.metadata.truncated_counts && data.metadata.truncated_counts[seedDid]) {
         metaEl.innerHTML += `<br>Ghost Nodes: +${data.metadata.truncated_counts[seedDid]} hidden neighbors`;
-    }
-
-    const graphData = {
-      nodes: data.nodes.map(n => ({ ...n, id: n.did })),
-      links: data.links
-    };
-
-    if (!graph) {
-      const elem = document.getElementById('graph-container');
-      graph = ForceGraph()(elem);
     }
 
     graph.graphData(graphData)
@@ -109,41 +124,50 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null)
           return Math.sqrt(node.rank) * 200 + 1;
       })
       .nodeCanvasObject((node, ctx, globalScale) => {
-          const r = node.val / 2;
+          const isMeta = node.type === 'community_meta';
+          const r = (isMeta ? Math.sqrt(node.member_count) * 2.5 + 1 : Math.sqrt(node.rank) * 100 + 0.5);
+          
+          // Draw main node circle
           ctx.beginPath();
           ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
           ctx.fillStyle = node.color;
           ctx.fill();
-          ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-          ctx.lineWidth = 1;
+          // Subtle stroke
+          ctx.strokeStyle = node.type === 'community_meta' ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.2)';
+          ctx.lineWidth = 1 / globalScale;
           ctx.stroke();
 
-          if (node.type === 'community_meta') {
-              // Draw text label for meta-nodes
-              const label = `Comm ${node.id}`;
-              const fontSize = 12 / globalScale;
+           // --- Semantic Zoom Logic (Design Doc Section 5) ---
+          // Labels fade in based on zoom level and node importance
+          const labelThreshold = isMeta ? 0.2 : 2.5;
+          if (globalScale > labelThreshold) {
+              const label = isMeta ? `Community ${node.id}` : `@${node.handle}`;
+              const fontSize = (isMeta ? 14 : 10) / globalScale;
               ctx.font = `${fontSize}px Sans-Serif`;
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
-              ctx.fillStyle = 'white';
-              // Position below the node
-              ctx.fillText(label, node.x, node.y + r + fontSize / 2 + 2);
+              ctx.fillStyle = 'rgba(232, 234, 240, 0.85)';
+              ctx.fillText(label, node.x, node.y + r + fontSize + 2);
           }
       })
       .linkColor(CONFIG.linkColor)
-      .linkDirectionalParticles(2)
+      .linkDirectionalParticles(showParticles ? 4 : 0) // Governed by global toggle
       .linkDirectionalParticleSpeed(d => 0.005)
       .linkDirectionalParticleWidth(1)
       .linkDirectionalParticleColor(CONFIG.particleColor)
       .backgroundColor('#0c0e14')
-      .linkVisibility(link => {
-          return currentGraphMode !== 'community_overview'; // Hide links between meta-nodes
-      })
+      .linkVisibility(link => currentGraphMode !== 'community_overview')
       .onNodeClick(node => {
         const now = Date.now();
         if (now - lastClickTime < 300 && lastClickedNode === node) {
-          // Double Click: Walk into Ego-Graph
-          loadGraphData('ego', node.did);
+          // Double Click Logic
+          if (node.type === 'community_meta') {
+            // Shatter Meta-node into community details
+            loadGraphData('community', null, node.id, { x: node.x, y: node.y });
+          } else if (node.did) {
+            // Walk into Ego-Graph
+            loadGraphData('ego', node.did, null, { x: node.x, y: node.y });
+          }
         } else {
           // Single Click: Center view and zoom in slightly
           graph.centerAt(node.x, node.y, 1000);
@@ -183,6 +207,13 @@ function showCommunityOverview() {
 
 function backToCommunityOverview() {
     loadGraphData('community', null, null);
+}
+
+function toggleParticles(enabled) {
+    showParticles = enabled;
+    if (graph) {
+        graph.linkDirectionalParticles(showParticles ? 4 : 0);
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
