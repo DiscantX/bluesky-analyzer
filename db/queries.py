@@ -590,3 +590,110 @@ async def get_stats(owner_id: int) -> dict[str, Any]:
     )
     row = rows[0] if rows else {}
     return {key: int(value or 0) for key, value in row.items()}
+
+
+async def get_graph_data(
+    owner_id: int,
+    mode: str = "macro",
+    seed_did: str | None = None,
+    community_id: int | None = None,
+    limit: int = 1000
+) -> dict[str, Any]:
+    """
+    Retrieves nodes and links for graph visualization.
+    Supports stratified sampling for the macro-view and neighborhood fetching for ego-views.
+    """
+    conn = connections.get("default")
+    
+    # 1. Select Nodes based on mode
+    if mode == "macro":
+        # Stratified sampling: Top N per community + Bridges
+        nodes_query = """
+            WITH RankedNodes AS (
+                SELECT 
+                    r.did,
+                    p.handle,
+                    r.flowrank_score as rank,
+                    r.community_id as comm,
+                    r.crawl_tier as tier,
+                    r.clustering_coefficient as cc,
+                    ROW_NUMBER() OVER (PARTITION BY r.community_id ORDER BY r.flowrank_score DESC) as rank_in_comm
+                FROM account_relationships r
+                JOIN profiles p ON p.id = r.profile_id
+                WHERE r.owner_id = ? AND r.community_id IS NOT NULL
+            )
+            SELECT did, handle, rank, comm, tier
+            FROM RankedNodes
+            WHERE rank_in_comm <= 50
+               OR (cc < 0.1 AND rank > 0.001) -- Bridge nodes
+            ORDER BY rank DESC
+            LIMIT ?
+        """
+        params = [owner_id, limit]
+    elif mode == "ego" and seed_did:
+        # Neighborhood prioritized by FlowRank (Depth 1 and 2)
+        nodes_query = """
+            WITH Neighbors AS (
+                SELECT followee_did as did FROM follow_edges WHERE follower_did = ?
+                UNION
+                SELECT follower_did as did FROM follow_edges WHERE followee_did = ?
+            )
+            SELECT DISTINCT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier
+            FROM account_relationships r
+            JOIN profiles p ON p.id = r.profile_id
+            WHERE r.owner_id = ? 
+              AND (
+                r.did = ? 
+                OR r.did IN (SELECT did FROM Neighbors)
+                -- Optional: add Depth 2 logic here if performance allows, 
+                -- but usually Depth 1 + prioritized by Rank is a safer start
+              )
+            ORDER BY r.flowrank_score DESC
+            LIMIT ?
+        """
+        params = [seed_did, seed_did, owner_id, seed_did, limit]
+    else:
+        # Default fallback
+        nodes_query = """
+            SELECT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier
+            FROM account_relationships r
+            JOIN profiles p ON p.id = r.profile_id
+            WHERE r.owner_id = ?
+            ORDER BY r.flowrank_score DESC
+            LIMIT ?
+        """
+        params = [owner_id, limit]
+
+    nodes = await conn.execute_query_dict(nodes_query, params)
+    node_dids = [n["did"] for n in nodes]
+
+    if not node_dids:
+        return {"nodes": [], "links": []}
+
+    # 2. Select Links between the chosen nodes
+    placeholders = ",".join(["?"] * len(node_dids))
+    links_query = f"""
+        SELECT follower_did as source, followee_did as target
+        FROM follow_edges
+        WHERE follower_did IN ({placeholders})
+          AND followee_did IN ({placeholders})
+    """
+    links = await conn.execute_query_dict(links_query, node_dids + node_dids)
+
+    
+    # Calculate truncated counts for "Ghost Nodes" (Design Doc Section 3 - Tier C)
+    truncated_counts = {}
+    if mode == "ego" and seed_did:
+        total_neighbors_query = """
+            SELECT COUNT(DISTINCT neighbor) as count
+            FROM (
+                SELECT followee_did as neighbor FROM follow_edges WHERE follower_did = ?
+                UNION
+                SELECT follower_did as neighbor FROM follow_edges WHERE followee_did = ?
+            )
+        """
+        total_res = await conn.execute_query_dict(total_neighbors_query, [seed_did, seed_did])
+        total_neighbors = total_res[0]["count"] if total_res else 0
+        truncated_counts[seed_did] = max(0, total_neighbors - (len(nodes) - 1))
+
+    return {"nodes": nodes, "links": links, "metadata": {"truncated_counts": truncated_counts}}

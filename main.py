@@ -31,6 +31,7 @@ from api.sync import router as sync_router
 from api.users import router as users_router
 from api.filters import router as filters_router
 from api.settings import router as settings_router
+from api.graph import router as graph_router
 import analyzer.worker as worker_module
 from analyzer.manager import running_tasks
 
@@ -165,6 +166,7 @@ app.include_router(sync_router)
 app.include_router(users_router)
 app.include_router(filters_router)
 app.include_router(settings_router)
+app.include_router(graph_router)
 
 # ── Client logging ────────────────────────────────────────────────────────────
 @app.post("/api/client-log")
@@ -188,6 +190,10 @@ async def client_log(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
+
+@app.get("/graph/{alias}", response_class=HTMLResponse)
+async def graph_view(request: Request, alias: str):
+    return templates.TemplateResponse(request, "graph.html", {"alias": alias})
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health")

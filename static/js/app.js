@@ -317,7 +317,13 @@ function renderNav() {
         <span>${tab.label}</span>
         ${count !== "" ? `<span class="nav-count">${fmt(count)}</span>` : ""}
       </div>`;
-  }).join("");
+  }).join("") + `
+    <div class="sidebar-label" style="margin-top: 1rem;">Visualization</div>
+    <a class="nav-item" href="/graph/${state.activeAlias || ''}" style="text-decoration: none;">
+      <span>🕸️</span>
+      <span>Network Graph</span>
+    </a>
+  `;
 }
 
 function renderCustomFilters() {
