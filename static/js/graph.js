@@ -18,10 +18,14 @@ const COLORS = [
 let graph = null;
 let lastClickTime = 0;
 let lastClickedNode = null; // Used for double-click detection
+let selectedNode = null;
+let neighbors = new Set();
 
 let currentGraphMode = 'macro'; // 'macro', 'community_overview', 'community_detail', 'ego'
 let currentCommunityId = null; // Tracks which community is being viewed in detail
 let showParticles = true; // Global toggle state for flow particles
+
+const fmt = (n) => n == null ? "—" : Number(n).toLocaleString();
 
 async function loadGraphData(mode = 'macro', seedDid = null, communityId = null, spawnAt = null) {
   const statusEl = document.getElementById('graph-status');
@@ -84,6 +88,18 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
       links: data.links
     };
 
+    // Pre-calculate neighbors for highlighting logic
+    data.links.forEach(link => {
+        const a = nodes.find(n => n.id === (link.source.id || link.source));
+        const b = nodes.find(n => n.id === (link.target.id || link.target));
+        if (a && b) {
+            if (!a.neighbors) a.neighbors = [];
+            if (!b.neighbors) b.neighbors = [];
+            a.neighbors.push(b);
+            b.neighbors.push(a);
+        }
+    });
+
     // Update UI buttons visibility
     resetBtn.style.display = (mode === 'macro' || mode === 'community_overview') ? 'none' : 'block';
     communityOverviewBtn.style.display = (mode === 'macro' || mode === 'ego') ? 'block' : 'none';
@@ -127,6 +143,10 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
           const isMeta = node.type === 'community_meta';
           const r = (isMeta ? Math.sqrt(node.member_count) * 2.5 + 1 : Math.sqrt(node.rank) * 100 + 0.5);
           
+          const isHighlighted = !selectedNode || selectedNode === node || neighbors.has(node);
+          ctx.save();
+          ctx.globalAlpha = isHighlighted ? 1 : 0.1;
+
           // Draw main node circle
           ctx.beginPath();
           ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
@@ -149,9 +169,18 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
               ctx.fillStyle = 'rgba(232, 234, 240, 0.85)';
               ctx.fillText(label, node.x, node.y + r + fontSize + 2);
           }
+          ctx.restore();
       })
-      .linkColor(CONFIG.linkColor)
-      .linkDirectionalParticles(showParticles ? 4 : 0) // Governed by global toggle
+      .linkColor(link => {
+          if (!selectedNode) return CONFIG.linkColor();
+          const isHighlighted = link.source === selectedNode || link.target === selectedNode;
+          return isHighlighted ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.02)';
+      })
+      .linkDirectionalParticles(link => {
+          if (!showParticles) return 0;
+          if (!selectedNode) return 4;
+          return (link.source === selectedNode || link.target === selectedNode) ? 4 : 0;
+      })
       .linkDirectionalParticleSpeed(d => 0.005)
       .linkDirectionalParticleWidth(1)
       .linkDirectionalParticleColor(CONFIG.particleColor)
@@ -169,16 +198,15 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
             loadGraphData('ego', node.did, null, { x: node.x, y: node.y });
           }
         } else {
-          // Single Click: Center view and zoom in slightly
-          graph.centerAt(node.x, node.y, 1000);
-          graph.zoom(4, 1000);
+          handleNodeSelection(node);
         }
         lastClickTime = now;
         lastClickedNode = node;
       })
       .onNodeRightClick(node => {
          window.open(`https://bsky.app/profile/${node.did}`, '_blank');
-      });
+      })
+      .onBackgroundClick(deselectNode);
 
     // Adjust forces
     graph.d3Force('charge').strength(-120);
@@ -194,6 +222,87 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
     console.error('Graph init failed:', err);
     statusEl.textContent = 'Error loading graph.';
   }
+}
+
+async function handleNodeSelection(node) {
+    if (selectedNode === node) {
+        deselectNode();
+        return;
+    }
+    selectedNode = node;
+    neighbors = new Set(node.neighbors || []);
+    
+    graph.centerAt(node.x, node.y, 1000);
+    graph.zoom(4, 1000);
+    
+    // Force re-render for highlighting
+    graph.nodeRelSize(CONFIG.nodeRelSize);
+    
+    showNodeDetails(node);
+}
+
+function deselectNode() {
+    selectedNode = null;
+    neighbors.clear();
+    document.getElementById('side-panel').classList.remove('open');
+    graph.nodeRelSize(CONFIG.nodeRelSize);
+}
+
+async function showNodeDetails(node) {
+    const panel = document.getElementById('side-panel');
+    const content = document.getElementById('panel-content');
+    panel.classList.add('open');
+    
+    if (node.type === 'community_meta') {
+        content.innerHTML = `<div class="state-box">Meta-Node: Community ${node.id}<br>Double-click to expand ${node.member_count} profiles.</div>`;
+        return;
+    }
+
+    content.innerHTML = `<div class="state-box">Loading profile...</div>`;
+    
+    try {
+        const params = new URLSearchParams();
+        params.set('limit', '1');
+        params.set('filter_tree', JSON.stringify({ op: "AND", conditions: [{ field: "did", op: "eq", value: node.did }] }));
+
+        const response = await fetch(`/api/users/${ACTIVE_ALIAS}?${params.toString()}`);
+        const result = await response.json();
+        const u = result.users[0];
+        
+        if (!u) { content.innerHTML = `<div class="state-box">Profile not in DB.</div>`; return; }
+
+        content.innerHTML = `
+            <div style="padding: 1rem;">
+                <div style="display:flex; gap:1rem; align-items:center; margin-bottom:1.5rem;">
+                    ${u.avatar_url ? `<img src="${u.avatar_url}" style="width:56px; height:56px; border-radius:50%; border:1px solid var(--border);">` : `<div class="avatar-placeholder" style="width:56px; height:56px;">${u.handle[0].toUpperCase()}</div>`}
+                    <div style="overflow:hidden;">
+                        <div style="font-weight:800; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${u.display_name || '—'}</div>
+                        <div style="font-family:var(--mono); font-size:0.75rem; color:var(--accent);">@${u.handle}</div>
+                    </div>
+                </div>
+
+                <div class="sidebar-label">Network Position</div>
+                <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.7rem; margin-bottom:1rem;">
+                    <div style="display:flex; justify-content:space-between;"><span>FlowRank</span><span style="color:var(--accent);">${(u.flowrank_score * 1000).toFixed(4)}</span></div>
+                    <div style="display:flex; justify-content:space-between;"><span>Community</span><span style="color:var(--accent2);">#${u.community_id ?? '—'}</span></div>
+                    <div style="display:flex; justify-content:space-between;"><span>In-Degree</span><span>${u.in_subgraph_degree}</span></div>
+                </div>
+
+                <div class="sidebar-label">Activity Signals</div>
+                <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.7rem; margin-bottom:1rem;">
+                    <div style="display:flex; justify-content:space-between;"><span>Repost Ratio</span><span>${(u.repost_ratio * 100).toFixed(1)}%</span></div>
+                    <div style="display:flex; justify-content:space-between;"><span>Last Post</span><span>${u.days_since_post != null ? u.days_since_post + 'd ago' : '—'}</span></div>
+                    <div style="display:flex; justify-content:space-between;"><span>Interacted</span><span style="color:${u.interacted_with_owner ? 'var(--repost)' : 'var(--muted)'};">${u.interacted_with_owner ? 'YES' : 'NO'}</span></div>
+                </div>
+
+                <div style="display:flex; gap:0.5rem; margin-top:2rem;">
+                    <a href="https://bsky.app/profile/${u.did}" target="_blank" class="btn btn-primary" style="flex:1; justify-content:center;">Open in Bluesky</a>
+                </div>
+            </div>
+        `;
+    } catch (err) {
+        content.innerHTML = `<div class="state-box" style="color:var(--danger)">Failed to fetch profile.</div>`;
+    }
 }
 
 // UI functions for navigation

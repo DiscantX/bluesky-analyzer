@@ -58,6 +58,7 @@ FILTERABLE_FIELDS_MAP = {
     "is_follower_only": "r.is_follower_only",
     # Boolean flags (from Profile)
 
+    "did": "p.did",
     # Numeric fields (from Profile)
     "followers_count": "p.followers_count",
     "follows_count": "p.follows_count",
