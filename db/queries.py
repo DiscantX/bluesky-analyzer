@@ -338,10 +338,16 @@ async def _where(
     max_crawl_priority: float | None = None,
     min_clustering_coefficient: float | None = None,
     max_clustering_coefficient: float | None = None,
+    before_last_post_at: str | None = None,
+    after_last_post_at: str | None = None,
+    before_last_analyzed_at: str | None = None,
+    after_last_analyzed_at: str | None = None,
     before_last_hydrated_at: str | None = None,
     after_last_hydrated_at: str | None = None,
     before_last_crawled_at: str | None = None,
     after_last_crawled_at: str | None = None,
+    before_first_seen_at: str | None = None,
+    after_first_seen_at: str | None = None,
 ) -> tuple[str, list[Any]]:
     clauses = ["r.owner_id = ?"]
     params: list[Any] = [owner_id]
@@ -428,6 +434,18 @@ async def _where(
         clauses.append("r.clustering_coefficient <= ?")
         params.append(max_clustering_coefficient)
 
+    if before_last_post_at is not None:
+        clauses.append("p.last_post_at < ?")
+        params.append(before_last_post_at)
+    if after_last_post_at is not None:
+        clauses.append("p.last_post_at > ?")
+        params.append(after_last_post_at)
+    if before_last_analyzed_at is not None:
+        clauses.append("p.last_analyzed_at < ?")
+        params.append(before_last_analyzed_at)
+    if after_last_analyzed_at is not None:
+        clauses.append("p.last_analyzed_at > ?")
+        params.append(after_last_analyzed_at)
     if before_last_hydrated_at is not None:
         clauses.append("p.last_hydrated_at < ?")
         params.append(before_last_hydrated_at)
@@ -470,10 +488,16 @@ async def query_users(
     max_crawl_priority: float | None = None,
     min_clustering_coefficient: float | None = None,
     max_clustering_coefficient: float | None = None,
+    before_last_post_at: str | None = None,
+    after_last_post_at: str | None = None,
+    before_last_analyzed_at: str | None = None,
+    after_last_analyzed_at: str | None = None,
     before_last_hydrated_at: str | None = None,
     after_last_hydrated_at: str | None = None,
     before_last_crawled_at: str | None = None,
     after_last_crawled_at: str | None = None,
+    before_first_seen_at: str | None = None,
+    after_first_seen_at: str | None = None,
     sort_by: str = "handle",
     sort_dir: str = "asc",
     limit: int = 200,
@@ -504,10 +528,16 @@ async def query_users(
         max_crawl_priority=max_crawl_priority,
         min_clustering_coefficient=min_clustering_coefficient,
         max_clustering_coefficient=max_clustering_coefficient,
+        before_last_post_at=before_last_post_at,
+        after_last_post_at=after_last_post_at,
+        before_last_analyzed_at=before_last_analyzed_at,
+        after_last_analyzed_at=after_last_analyzed_at,
         before_last_hydrated_at=before_last_hydrated_at,
         after_last_hydrated_at=after_last_hydrated_at,
         before_last_crawled_at=before_last_crawled_at,
         after_last_crawled_at=after_last_crawled_at,
+        before_first_seen_at=before_first_seen_at,
+        after_first_seen_at=after_first_seen_at,
     )
     order_col = SORTABLE_FIELDS.get(sort_by, "p.handle")
     direction = "DESC" if sort_dir == "desc" else "ASC"
