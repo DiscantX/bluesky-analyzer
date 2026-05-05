@@ -162,12 +162,16 @@ async def _resolve_field_sql(field_name: Any, owner_id: int) -> str | None:
 
 async def _build_math_sql(cond: dict, owner_id: int) -> str | None:
     """Helper to build math expressions from a node."""
-    left_field = cond.get("left_field")
+    # Recursively resolve the left side (could be a raw column, constant, or sub-expression)
+    left_field = cond.get("left_field") or cond.get("field")
     if left_field == "__constant__":
         left_field = cond.get("left_value", 0)
+    elif left_field is None and cond.get("numerator"): 
+        left_field = cond.get("numerator")
     
     extra_terms = cond.get("extra_terms")
-    if left_field is None and cond.get("numerator"): left_field = cond.get("numerator")
+    if not extra_terms and cond.get("denominator"):
+        extra_terms = [{"op": "div", "field": cond.get("denominator")}]
 
     # Legacy support
     if left_field and extra_terms is None:
@@ -188,13 +192,15 @@ async def _build_math_sql(cond: dict, owner_id: int) -> str | None:
         t_op = term.get("op")
         t_field = term.get("field")
         if t_field == "__constant__":
-            t_field = term.get("value", 0)
+            # For constants, we resolve the literal value
+            col_right = str(term.get("value", 0))
+        else:
+            col_right = await _resolve_field_sql(t_field, owner_id)
             
-        col_right = await _resolve_field_sql(t_field, owner_id)
         if not col_right:
             return None
         
-        if t_op == "add": expr_sql = f"({expr_sql} + {col_right})"
+        if t_op == "add":   expr_sql = f"({expr_sql} + {col_right})"
         elif t_op == "sub": expr_sql = f"({expr_sql} - {col_right})"
         elif t_op == "mul": expr_sql = f"({expr_sql} * {col_right})"
         elif t_op == "div": expr_sql = f"(1.0 * {expr_sql} / NULLIF({col_right}, 0))"

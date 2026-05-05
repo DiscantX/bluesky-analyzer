@@ -1072,28 +1072,31 @@ function renderRule(rule, groupId) {
       rule.extra_terms = [{ op: "div", field: "follows_count" }];
     }
 
-    const renderOperand = (currentField, currentValue, onFieldChange, onValueChange) => {
-        if (currentField === '__constant__') {
-            return `
-                <div style="display:flex; gap:2px">
-                    <input type="number" step="0.01" class="rule-field" style="width:60px" value="${currentValue || 0}" oninput="${onValueChange}">
-                    <button class="btn btn-ghost btn-mini" onclick="${onFieldChange}('followers_count')" title="Switch to Field">#</button>
-                </div>`;
-        }
+    /**
+     * FIXED: Helper to render an operand (field select OR constant input)
+     * correctly handling string-based event handlers for the builder.
+     */
+    const renderOperand = (field, value, ruleId, path, isTerm = false, idx = null) => {
+      const fieldSet = isTerm ? `updateMathTerm('${ruleId}', ${idx}, 'field', this.value)` : `updateRule('${ruleId}', '${path}', this.value)`;
+      const valueSet = isTerm ? `updateMathTerm('${ruleId}', ${idx}, 'value', Number(this.value))` : `updateRule('${ruleId}', '${path.replace('field', 'value')}', Number(this.value))`;
+      const switchToField = isTerm ? `updateMathTerm('${ruleId}', ${idx}, 'field', 'followers_count')` : `updateRule('${ruleId}', '${path}', 'followers_count')`;
+
+      if (field === '__constant__') {
         return `
-            <select class="rule-field" style="width:110px" onchange="${onFieldChange}(this.value)">
-                ${renderFieldOptions(currentField, true)}
-            </select>`;
+          <div style="display:flex; gap:2px">
+            <input type="number" step="0.01" class="rule-field" style="width:60px" value="${value || 0}" oninput="${valueSet}">
+            <button class="btn btn-ghost btn-mini" onclick="${switchToField}" title="Switch to Field">#</button>
+          </div>`;
+      }
+      return `
+        <select class="rule-field" style="width:110px" onchange="${fieldSet}">
+          ${renderFieldOptions(field, true)}
+        </select>`;
     };
 
     const termsHtml = rule.extra_terms.map((term, idx) => {
       const mathOpts = MATH_OPS.map(o => `<option value="${o.val}" ${term.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("");
-      const operandHtml = renderOperand(
-          term.field, 
-          term.value, 
-          (v) => `updateMathTerm('${rule.id}', ${idx}, 'field', '${v}')`,
-          (v) => `updateMathTerm('${rule.id}', ${idx}, 'value', Number(this.value))`
-      );
+      const operandHtml = renderOperand(term.field, term.value, rule.id, null, true, idx);
 
       return `
         <select class="rule-field" style="width:40px; font-weight:bold" onchange="updateMathTerm('${rule.id}', ${idx}, 'op', this.value)">
@@ -1110,17 +1113,13 @@ function renderRule(rule, groupId) {
       ? `<button class="btn btn-primary btn-mini" onclick="saveEditedVariable('${rule.id}', ${editingVarId})" title="Save changes to variable">✓ Save</button>
          <button class="btn btn-ghost btn-mini" onclick="cancelVariableEdit('${rule.id}', ${editingVarId})" title="Cancel edit">✕</button>`
       : `<button class="btn btn-ghost btn-mini" onclick="prepareVariableSave('${rule.id}')" title="Save as Variable">💾</button>`;
-   
-      const leftOperandHtml = renderOperand(
-        rule.left_field, 
-        rule.left_value, 
-        (v) => `updateRule('${rule.id}', 'left_field', '${v}')`,
-        (v) => `updateRule('${rule.id}', 'left_value', Number(this.value))`
-    );
+  
+    const leftOperandHtml = renderOperand(rule.left_field, rule.left_value, rule.id, 'left_field');
+
 
     const comparisonHtml = isDefiningVariable ? '' : `
         <select class="rule-op" onchange="updateRule('${rule.id}', 'op', this.value)">
-          ${ops.map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
+          ${(OPERATORS_BY_TYPE["math"] || []).map(o => `<option value="${o.val}" ${rule.op === o.val ? 'selected' : ''}>${o.label}</option>`).join("")}
         </select>
         <input class="rule-value" type="number" step="0.01" value="${rule.value || ''}"
                oninput="updateRule('${rule.id}', 'value', Number(this.value))">
@@ -1492,27 +1491,17 @@ async function saveCurrentExpressionAsVariable() {
   // Remove the originating math rule from the tree
   const originatingRuleId = _pendingVariableSaveRuleId;
   if (originatingRuleId) {
-    // Find what op/value the math rule had so we can preserve them on the variable chip
-    const mathNode = findNode(builderState.tree, originatingRuleId);
-    const preservedOp = mathNode ? mathNode.op : "gt";
-    const preservedValue = mathNode ? mathNode.value : 0;
-
-    // Remove the math rule
-    removeNodeSilent(originatingRuleId);
-
-    // Find the group that contained it (root as fallback) and add variable chip
-    // We add to root since we don't track the parent group after removal
-    const savedVar = state.variables.find(v => v.name === name);
-    if (savedVar) {
-      const newRule = {
-        id: Math.random().toString(36).substr(2, 9),
-        field: savedVar.name,
-        op: preservedOp,
-        value: preservedValue,
-      };
-      builderState.tree.conditions.push(newRule);
+    const node = findNode(builderState.tree, originatingRuleId);
+    if (node) {
+      // FIXED: Mutate the node in place to carry over the comparison op and target value
+      node.field = name;
+      // node.op and node.value are already correctly set on the existing math node
+      delete node.left_field;
+      delete node.left_value;
+      delete node.extra_terms;
+      delete node._editingVariableId;
+      delete node._editingVariableName;
     }
-
     _pendingVariableSaveRuleId = null;
   }
 
