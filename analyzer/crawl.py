@@ -19,13 +19,6 @@ logger = logging.getLogger(__name__)
 # Minimum connections to existing tracked users before a stub is expanded
 MIN_CONNECTION_THRESHOLD = 3
 
-# Max concurrent discovery tasks
-CRAWL_CONCURRENCY = 3
-HYDRATION_CONCURRENCY = 2
-CRAWL_SEMAPHORE = asyncio.Semaphore(CRAWL_CONCURRENCY)
-HYDRATION_SEMAPHORE = asyncio.Semaphore(HYDRATION_CONCURRENCY)
-
-
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -121,6 +114,10 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     if seeded:
         logger.info(f"Seeded {seeded} crawl queue items for {owner.alias}")
 
+    # Dynamically initialize semaphores based on current GlobalSettings
+    crawl_semaphore = asyncio.Semaphore(settings.crawl_concurrency)
+    hydration_semaphore = asyncio.Semaphore(2) # Keep hydration internal limit
+
     candidates = await claim_crawl_items(owner, batch_size)
 
     if not candidates:
@@ -139,7 +136,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     rel_tier_by_did = {rel.did: rel.crawl_tier for rel in owner_relationships}
 
     async def process_candidate(item: CrawlQueueItem):
-        async with CRAWL_SEMAPHORE:
+        async with crawl_semaphore:
             user = await AccountRelationship.filter(owner=owner, did=item.did).prefetch_related("profile").first()
             if not user:
                 item.status = "skipped"
@@ -224,7 +221,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     # We will update in_subgraph_degree in a batch after hydration
                     await enqueue_crawl_user(owner, target_user)
 
-                await hydrate_stubs(owner, page_dids)
+                await hydrate_stubs(owner, page_dids, hydration_semaphore)
                 
                 # Recalculate degree for the batch
                 for did in page_dids:
@@ -384,13 +381,13 @@ async def claim_crawl_items(owner: SavedAccount, batch_size: int) -> list[CrawlQ
     return items
 
 
-async def hydrate_stubs(owner: SavedAccount, dids: list[str]) -> int:
+async def hydrate_stubs(owner: SavedAccount, dids: list[str], semaphore: asyncio.Semaphore) -> int:
     """Hydrate graph-discovered stubs with public profile counts/avatar data."""
     unique_dids = list(dict.fromkeys(dids))
     if not unique_dids:
         return 0
 
-    async with HYDRATION_SEMAPHORE:
+    async with semaphore:
         profiles = await public_fetch_profiles(unique_dids)
 
     hydrated = 0

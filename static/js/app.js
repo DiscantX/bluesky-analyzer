@@ -524,6 +524,9 @@ async function fetchUsers(append = false, silent = false) {
   for (const key of dateFilters) {
     if (state.filters[key] != null) params.set(key, state.filters[key]);
   }
+  for (const key of dateFilters) {
+    if (state.filters[key] != null) params.set(key, state.filters[key]);
+  }
 
   try {
     const data = await api(`/api/users/${state.activeAlias}?${params}`);
@@ -1568,6 +1571,14 @@ async function saveFilterSet() {
   }
   closeFilterBuilder();
   await loadFilterSets();
+}
+
+async function handleDeleteInBuilder() {
+  if (!builderState.id) return;
+  if (!confirm("Delete this filter?")) return;
+  await api(`/api/filters/${state.activeAlias}/${builderState.id}`, { method: "DELETE" });
+  await loadFilterSets();
+  closeFilterBuilder();
 }
 
 async function loadFilterSets() {

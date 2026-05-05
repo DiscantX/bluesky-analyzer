@@ -459,6 +459,24 @@ async def _where(
     if after_last_crawled_at is not None:
         clauses.append("r.last_crawled_at > ?")
         params.append(after_last_crawled_at)
+    if before_last_analyzed_at is not None:
+        clauses.append("p.last_analyzed_at < ?")
+        params.append(before_last_analyzed_at)
+    if after_last_analyzed_at is not None:
+        clauses.append("p.last_analyzed_at > ?")
+        params.append(after_last_analyzed_at)
+    if before_last_hydrated_at is not None:
+        clauses.append("p.last_hydrated_at < ?")
+        params.append(before_last_hydrated_at)
+    if after_last_hydrated_at is not None:
+        clauses.append("p.last_hydrated_at > ?")
+        params.append(after_last_hydrated_at)
+    if before_last_crawled_at is not None:
+        clauses.append("r.last_crawled_at < ?")
+        params.append(before_last_crawled_at)
+    if after_last_crawled_at is not None:
+        clauses.append("r.last_crawled_at > ?")
+        params.append(after_last_crawled_at)
 
     return " AND ".join(clauses), params
 

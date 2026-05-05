@@ -14,14 +14,14 @@ class ProgressBus:
     A simple Pub/Sub bus allowing multiple listeners for progress events.
     """
     def __init__(self):
-        self.subscribers: Dict[str, Set[asyncio.Queue]] = {}
+        self.subscribers: Dict[str, Set[tuple[asyncio.Queue, str | None]]] = {}
         self.last_event: Dict[tuple[str, str | None], Any] = {}
 
     def subscribe(self, alias: str, operation: str | None = None) -> asyncio.Queue:
         queue = asyncio.Queue(maxsize=100)
         if alias not in self.subscribers:
             self.subscribers[alias] = set()
-        self.subscribers[alias].add(queue)
+        self.subscribers[alias].add((queue, operation))
         key = (alias, operation)
         if operation and key in self.last_event:
             queue.put_nowait(self.last_event[key])
@@ -29,17 +29,20 @@ class ProgressBus:
 
     def unsubscribe(self, alias: str, queue: asyncio.Queue):
         if alias in self.subscribers:
-            self.subscribers[alias].discard(queue)
+            self.subscribers[alias] = {s for s in self.subscribers[alias] if s[0] != queue}
             if not self.subscribers[alias]:
                 del self.subscribers[alias]
 
     async def emit(self, alias: str, event: Any):
-        self.last_event[(alias, event.get("operation"))] = event
+        op = event.get("operation")
+        self.last_event[(alias, op)] = event
         if alias not in self.subscribers:
             return
         
         # Send to all active queues for this alias
-        for queue in list(self.subscribers[alias]):
+        for queue, sub_op in list(self.subscribers[alias]):
+            if sub_op and op != sub_op:
+                continue
             try:
                 # If queue is full, drop the oldest message to stay real-time
                 if queue.full():
