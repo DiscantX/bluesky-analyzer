@@ -112,8 +112,11 @@ def _compute_metrics_sync(G: nx.DiGraph) -> Dict[str, Dict[str, Any]]:
     try:
         if G.number_of_nodes() <= FULL_LOUVAIN_MAX_NODES:
             communities = nx.community.louvain_communities(undirected, seed=42)
+        elif G.number_of_nodes() <= 500000:
+            # Label propagation is linear O(E) and handles our current scale easily
+            communities = nx.community.label_propagation_communities(undirected)
         else:
-            communities = nx.connected_components(undirected)
+            communities = nx.connected_components(undirected) # Last resort for millions
         community_map = {}
         for i, community_nodes in enumerate(communities):
             for did in community_nodes:

@@ -2,12 +2,17 @@ import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 
+from tortoise.expressions import Q
+
 import config
 from analyzer.client import BskyClient
 from analyzer.crawl import crawl_step, refresh_priorities
+from analyzer.fetch import fetch_feeds_concurrent
+from analyzer.analyze import build_tracked_user_data
 from analyzer.manager import bus, is_operation_running, running_tasks, task_key
 from analyzer.sync import run_sync
-from db.models import CrawlRun, SavedAccount, AccountRelationship
+from db.models import CrawlRun, SavedAccount, AccountRelationship, GlobalSettings
+from db.profile_store import upsert_profile_relationship
 
 logger = logging.getLogger(__name__)
 
@@ -42,19 +47,76 @@ def schedule_crawl(account: SavedAccount) -> bool:
     running_tasks[key] = asyncio.create_task(run_auto_crawl(account))
     return True
 
+def schedule_discovery_analysis(account: SavedAccount) -> bool:
+    """Schedule a discovery analysis for promoted stubs."""
+    key = task_key(account.alias, "discovery")
+    if is_operation_running(account.alias, "discovery"):
+        return False
+    bus.clear(account.alias, "discovery")
+    running_tasks[key] = asyncio.create_task(run_auto_discovery_analysis(account))
+    return True
+
+async def promote_stubs(account: SavedAccount):
+    """
+    Promotes Tier 0 (Stubs) to Tier 1 (Standard) if they meet
+    interest thresholds (high connections or influence).
+    """
+    settings = await GlobalSettings.get(id=1)
+    # Promote based on subgraph density or FlowRank prestige
+    promotable = await AccountRelationship.filter(
+        owner=account,
+        crawl_tier=0
+    ).filter(
+        Q(in_subgraph_degree__gte=settings.min_connection_threshold) |
+        Q(flowrank_score__gt=0.0001)
+    ).all()
+    
+    if promotable:
+        logger.info(f"Promoting {len(promotable)} stubs to Tier 1 for {account.alias}")
+        for rel in promotable:
+            rel.crawl_tier = 1
+            await rel.save(update_fields=["crawl_tier"])
 
 async def needs_urgent_sync(account: SavedAccount) -> bool:
     """
-    Returns True if there are Tier 1 (Standard) relationships 
+    Returns True if there are direct follows (Standard/Full)
+    that have never been analyzed.
+    """
+    count = await AccountRelationship.filter(
+        owner=account,
+        i_follow_them=True,
+        profile__last_analyzed_at__isnull=True
+    ).count()
+    if count > 0:
+        logger.info(f"Account {account.alias} has {count} un-analyzed follows. Prioritizing sync.")
+    return count > 0
+
+async def needs_discovery_analysis(account: SavedAccount) -> bool:
+    """
+    Returns True if there are promoted stubs (Tier 1)
     that have never been analyzed.
     """
     count = await AccountRelationship.filter(
         owner=account,
         crawl_tier__gt=0,
+        i_follow_them=False,
+        profile__last_analyzed_at__isnull=True
+    ).count()
+    return count > 0
+
+async def needs_discovery_analysis(account: SavedAccount) -> bool:
+    """
+    Returns True if there are promoted stubs (Tier 1)
+    that have never been analyzed.
+    """
+    count = await AccountRelationship.filter(
+        owner=account,
+        crawl_tier__gt=0,
+        i_follow_them=False,
         profile__last_analyzed_at__isnull=True
     ).count()
     if count > 0:
-        logger.info(f"Account {account.alias} has {count} un-analyzed tracked profiles. Prioritizing sync.")
+        logger.info(f"Account {account.alias} has {count} un-analyzed discovery stubs. Prioritizing discovery analysis.")
     return count > 0
 
 
@@ -78,11 +140,17 @@ async def worker_loop():
             now = datetime.now(timezone.utc)
 
             for account in accounts:
+                # 1. Expand the Tier 1 candidate pool
+                await promote_stubs(account)
+
                 if account.auto_sync_enabled:
-                    # Urgency check: stale sync OR un-analyzed standard profiles
+                    # Urgency check: stale sync OR un-analyzed direct follows
                     stale = not account.last_synced_at or (now - account.last_synced_at) > SYNC_STALENESS
                     if stale or await needs_urgent_sync(account):
                         schedule_sync(account)
+
+                if not is_operation_running(account.alias, "sync") and await needs_discovery_analysis(account):
+                    schedule_discovery_analysis(account)
 
                 if account.auto_crawl_enabled and account.last_synced_at:
                     # Only crawl if a sync isn't urgently needed or currently running
@@ -139,3 +207,54 @@ async def run_auto_crawl(account: SavedAccount):
         await bus.emit(account.alias, {"kind": "error", "operation": "crawl", "message": str(e)})
     finally:
         running_tasks.pop(task_key(account.alias, "crawl"), None)
+
+async def run_auto_discovery_analysis(account: SavedAccount):
+    """
+    Fetches feeds and activity metrics for promoted stubs.
+    Targets accounts that are Tier 1 but NOT follows/followers.
+    """
+    try:
+        password = config.get_password(account.alias)
+        if not password:
+            return
+
+        client = BskyClient(alias=account.alias)
+        await client.login(account.handle, password)
+
+        # Find targets (Tier 1 stubs missing analysis)
+        targets = await AccountRelationship.filter(
+            owner=account,
+            crawl_tier__gt=0,
+            profile__last_analyzed_at__isnull=True
+        ).limit(50).prefetch_related("profile")
+
+        if not targets:
+            return
+
+        dids = [t.did for t in targets]
+        target_map = {t.did: t for t in targets}
+        settings = await GlobalSettings.get(id=1)
+
+        async for did, feed_items in fetch_feeds_concurrent(
+            client, dids, limit_per_actor=settings.feed_sample_size
+        ):
+            rel = target_map[did]
+            profile = await rel.profile
+            data = build_tracked_user_data(
+                profile=profile,
+                feed_items=feed_items,
+                owner_did=account.did,
+                i_follow_them=rel.i_follow_them,
+                they_follow_me=rel.they_follow_me,
+                inactive_days=settings.inactivity_threshold_days,
+                repost_threshold=settings.repost_ratio_threshold
+            )
+            data["last_analyzed_at"] = datetime.now(timezone.utc)
+            await upsert_profile_relationship(account, data)
+            
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"Discovery analysis failed for {account.alias}: {e}")
+    finally:
+        running_tasks.pop(task_key(account.alias, "discovery"), None)

@@ -169,29 +169,29 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             await emit(msg)
             discovered_new = 0
 
-            async def process_page(batch):
+            async def process_page(batch, direction: str):
                 nonlocal discovered_new
                 page_dids = [f["did"] for f in batch]
                 
-                # OPTIMIZATION: Load all edges for all discovered accounts in ONE query
-                # instead of querying individually per account (N+1 prevention).
-                all_edges = await FollowEdge.filter(followee_did__in=page_dids).all()
-                edges_by_target = {}
-                for edge in all_edges:
-                    if edge.followee_did not in edges_by_target:
-                        edges_by_target[edge.followee_did] = set()
-                    edges_by_target[edge.followee_did].add(edge.follower_did)
+                # Determine edges based on direction
+                if direction == "follows":
+                    # We are looking at who 'user' follows
+                    edge_pairs = [(user.did, target_did) for target_did in page_dids]
+                    target_filter = {"followee_did__in": page_dids}
+                else:
+                    # We are looking at who follows 'user'
+                    edge_pairs = [(target_did, user.did) for target_did in page_dids]
+                    target_filter = {"follower_did__in": page_dids}
                 
-                # OPTIMIZATION: Batch-create missing edges instead of get_or_create per account
-                existing_edges = set(
-                    (edge.follower_did, edge.followee_did)
-                    for edge in all_edges
-                )
+                all_edges = await FollowEdge.filter(**target_filter).all()
+                existing_edges = {(e.follower_did, e.followee_did) for e in all_edges}
+                
                 new_edges = [
-                    FollowEdge(follower_did=user.did, followee_did=target_did)
-                    for target_did in page_dids
-                    if (user.did, target_did) not in existing_edges
+                    FollowEdge(follower_did=s, followee_did=t)
+                    for s, t in edge_pairs
+                    if (s, t) not in existing_edges
                 ]
+
                 if new_edges:
                     await FollowEdge.bulk_create(new_edges, ignore_conflicts=True)
                 
@@ -221,38 +221,46 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     if target_user.first_seen_at and target_user.first_seen_at >= _now() - timedelta(seconds=5):
                         discovered_new += 1
 
-                    # Update metrics for the target using pre-loaded edge data (O(1) lookup)
-                    target_followers = edges_by_target.get(target_did, set())
-                    target_user.in_subgraph_degree = len(target_followers.intersection(tracked_dids))
-                    
-                    target_user.crawl_priority = await calculate_priority(target_user)
-                    await target_user.save()
+                    # We will update in_subgraph_degree in a batch after hydration
                     await enqueue_crawl_user(owner, target_user)
 
                 await hydrate_stubs(owner, page_dids)
+                
+                # Recalculate degree for the batch
+                for did in page_dids:
+                    t_user = await AccountRelationship.filter(owner=owner, did=did).first()
+                    if t_user:
+                        incoming = await FollowEdge.filter(followee_did=did).values_list("follower_did", flat=True)
+                        t_user.in_subgraph_degree = len(set(incoming).intersection(tracked_dids))
+                        t_user.crawl_priority = await calculate_priority(t_user)
+                        await t_user.save()
 
                 # Signal a batch of new discoveries to trigger UI refresh
                 await emit(f"Discovered {len(batch)} from @{user_profile.handle}")
 
             try:
-                cursor = item.cursor
-                while True:
-                    data = await public_fetch_graph(user.did, "follows", cursor=cursor)
-                    batch = data.get("follows", [])
-                    if batch:
-                        await process_page(batch)
+                # Sequential fetch of both directions
+                for direction in ["follows", "followers"]:
+                    cursor = item.cursor if direction == "follows" else None
+                    while True:
+                        data = await public_fetch_graph(user.did, direction, cursor=cursor)
+                        batch = data.get(direction, [])
+                        if batch:
+                            await process_page(batch, direction)
 
-                    next_cursor = data.get("cursor")
-                    item.cursor = next_cursor
-                    item.pages_fetched += 1
-                    item.edges_found += len(batch)
-                    await item.save(update_fields=["cursor", "pages_fetched", "edges_found"])
+                        next_cursor = data.get("cursor")
+                        if direction == "follows":
+                            item.cursor = next_cursor
+                        
+                        item.pages_fetched += 1
+                        item.edges_found += len(batch)
+                        await item.save(update_fields=["cursor", "pages_fetched", "edges_found"])
 
-                    if not next_cursor or not batch:
-                        break
-
-                    cursor = next_cursor
-                    await asyncio.sleep(0.1)
+                        if not next_cursor or not batch:
+                            break
+                        cursor = next_cursor
+                        await asyncio.sleep(0.1)
+                        
             except Exception as e:
                 logger.exception(f"Failed to expand @{user_profile.handle}: {e}")
                 item.status = "error"
