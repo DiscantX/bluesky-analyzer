@@ -652,6 +652,40 @@ async def get_graph_data(
             LIMIT ?
         """
         params = [seed_did, seed_did, owner_id, seed_did, limit]
+    elif mode == "community":
+        if community_id is None:
+            # Meta-nodes (communities overview)
+            nodes_query = """
+                SELECT
+                    r.community_id as id,
+                    COUNT(r.did) as member_count,
+                    AVG(r.flowrank_score) as avg_rank,
+                    MIN(p.handle) as representative_handle,
+                    'community_meta' as type -- Custom type for frontend
+                FROM account_relationships r
+                JOIN profiles p ON p.id = r.profile_id
+                WHERE r.owner_id = ? AND r.community_id IS NOT NULL
+                GROUP BY r.community_id
+                ORDER BY member_count DESC
+                LIMIT ?
+            """
+            params = [owner_id, limit]
+        else:
+            # Individual nodes within a specific community
+            nodes_query = """
+                SELECT
+                    r.did,
+                    p.handle,
+                    r.flowrank_score as rank,
+                    r.community_id as comm,
+                    r.crawl_tier as tier
+                FROM account_relationships r
+                JOIN profiles p ON p.id = r.profile_id
+                WHERE r.owner_id = ? AND r.community_id = ?
+                ORDER BY r.flowrank_score DESC
+                LIMIT ?
+            """
+            params = [owner_id, community_id, limit]
     else:
         # Default fallback
         nodes_query = """
@@ -665,11 +699,24 @@ async def get_graph_data(
         params = [owner_id, limit]
 
     nodes = await conn.execute_query_dict(nodes_query, params)
-    node_dids = [n["did"] for n in nodes]
+
+    # For community meta-nodes, links are not directly between them in this view.
+    # For individual nodes, we need their DIDs.
+    node_dids = []
+    if mode == "community" and community_id is None:
+        # Meta-nodes don't have DIDs in the same way, and we don't link them directly here.
+        # The frontend will handle conceptual links or layout.
+        links = []
+    else:
+        # For macro, ego, or community-detail, we need DIDs for links.
+        node_dids = [n["did"] for n in nodes if "did" in n]
 
     if not node_dids:
-        return {"nodes": [], "links": []}
+        # Return meta-nodes even if no links, or empty nodes if no DIDs
+        return {"nodes": nodes, "links": [], "metadata": {"mode": mode}}
 
+    # Only fetch links if there are actual DIDs to link
+    links = []
     # 2. Select Links between the chosen nodes
     placeholders = ",".join(["?"] * len(node_dids))
     links_query = f"""
@@ -696,4 +743,4 @@ async def get_graph_data(
         total_neighbors = total_res[0]["count"] if total_res else 0
         truncated_counts[seed_did] = max(0, total_neighbors - (len(nodes) - 1))
 
-    return {"nodes": nodes, "links": links, "metadata": {"truncated_counts": truncated_counts}}
+    return {"nodes": nodes, "links": links, "metadata": {"truncated_counts": truncated_counts, "mode": mode}}

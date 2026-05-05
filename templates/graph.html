@@ -38,6 +38,8 @@
 <div class="graph-controls">
   <a href="/" class="btn btn-ghost">← Back to Dashboard</a>
   <button id="reset-btn" class="btn btn-primary" style="display:none;" onclick="resetToMacro()">Reset to Macro-view</button>
+  <button id="community-overview-btn" class="btn btn-ghost" onclick="showCommunityOverview()">Show Communities</button>
+  <button id="back-to-community-btn" class="btn btn-ghost" style="display:none;" onclick="backToCommunityOverview()">← Back to Communities</button>
   <div style="background: var(--surface); padding: 0.5rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">
     <div class="sidebar-label" style="padding: 0 0 0.25rem 0">Graph Status</div>
     <div id="graph-status" style="font-size: 0.75rem; color: var(--muted);">Initializing...</div>
