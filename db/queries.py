@@ -609,8 +609,13 @@ async def get_stats(owner_id: int) -> dict[str, Any]:
         """,
         [owner_id],
     )
+    from analyzer.manager import global_req_tracker, global_found_tracker
+    
     row = rows[0] if rows else {}
-    return {key: int(value or 0) for key, value in row.items()}
+    stats = {key: int(value or 0) for key, value in row.items()}
+    stats["req_rate"] = global_req_tracker.get_rate()
+    stats["found_rate"] = global_found_tracker.get_rate()
+    return stats
 
 
 async def get_graph_data(

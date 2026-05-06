@@ -75,6 +75,7 @@ class BskyClient:
         self.alias = alias
         self._client = Client()
         self._semaphore = asyncio.Semaphore(concurrency)
+        self.request_count = 0
         self.rate_limit = RateLimitTracker()
         self._session_file = SESSION_DIR / f"{alias}.session"
 
@@ -138,6 +139,10 @@ class BskyClient:
             nonlocal retries
             while True:
                 try:
+                    from analyzer.manager import global_req_tracker
+                    self.request_count += 1
+                    global_req_tracker.record()
+                    
                     return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
                 except RequestException as e:
                     status = getattr(e, "response", None)

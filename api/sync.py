@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 import config
+import logging
 from analyzer.client import BskyClient
 from analyzer.sync import run_sync
 from analyzer.crawl import crawl_step
@@ -73,8 +74,8 @@ async def trigger_crawl(alias: str, batch_size: int = 20):
             # Brief delay to allow the frontend EventSource to connect
             await asyncio.sleep(1.5)
             
-            async def emit_progress(msg, pct=None):
-                event = {"kind": "progress", "operation": "crawl", "message": msg}
+            async def emit_progress(msg, pct=None, **kwargs):
+                event = {"kind": "progress", "operation": "crawl", "message": msg, **kwargs}
                 if pct is not None:
                     event["pct"] = pct
                 await bus.emit(alias, event)
@@ -170,17 +171,20 @@ async def sync_stream(alias: str, operation: str | None = None):
 @router.get("/{alias}/status")
 async def sync_status(alias: str):
     """Return latest sync and crawl status for this account (polling fallback)."""
+    from analyzer.manager import global_req_tracker, global_found_tracker
     run = await SyncRun.filter(account__alias=alias).order_by("-started_at").first()
     crawl_run = await CrawlRun.filter(account__alias=alias).order_by("-started_at").first()
 
     sync_payload = {"status": "never_synced"}
     if run:
+        live_sync = bus.last_event.get((alias, "sync"), {})
         sync_payload = {
             "status": run.status,
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
             "follows_fetched": run.follows_fetched,
             "followers_fetched": run.followers_fetched,
+            "request_count": live_sync.get("req_count", run.request_count),
             "error_message": run.error_message,
         }
 
@@ -194,6 +198,16 @@ async def sync_status(alias: str):
             account_id=crawl_run.account_id,
             status="running",
         ).count()
+        
+        # ── MERGE LIVE IN-MEMORY STATS ────────────────────────────────────────
+        # If the crawl is running, the memory bus has more accurate numbers 
+        # than the disk.
+        live_event = bus.last_event.get((alias, "crawl"), {})
+        
+        discovered_count = live_event.get("discovered_count", crawl_run.discovered_count)
+        request_count = live_event.get("request_count", crawl_run.request_count)
+        last_message = live_event.get("message", crawl_run.last_message)
+
         crawl_payload = {
             "id": crawl_run.id,
             "status": crawl_run.status,
@@ -205,14 +219,16 @@ async def sync_status(alias: str):
             "candidates_completed": crawl_run.candidates_completed,
             "candidates_failed": crawl_run.candidates_failed,
             "candidates_skipped": crawl_run.candidates_skipped,
-            "discovered_count": crawl_run.discovered_count,
-            "last_message": crawl_run.last_message,
+            "discovered_count": discovered_count,
+            "last_message": last_message,
             "pending_queue_items": pending,
             "running_queue_items": running,
             "is_running": is_operation_running(alias, "crawl"),
         }
 
     return {
+        "req_rate": global_req_tracker.get_rate(),
+        "found_rate": global_found_tracker.get_rate(),
         **sync_payload,
         "is_running": is_running(alias),
         "sync_running": is_operation_running(alias, "sync"),

@@ -53,6 +53,7 @@ class SyncRun(Model):
     error_message = fields.TextField(null=True)
     follows_fetched = fields.IntField(default=0)
     followers_fetched = fields.IntField(default=0)
+    request_count = fields.IntField(default=0)
 
     class Meta:
         table = "sync_runs"

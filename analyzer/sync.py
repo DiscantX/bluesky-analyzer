@@ -127,8 +127,16 @@ async def run_sync(
     """
     sync_run = await SyncRun.create(account=saved_account, status="running")
 
+    session_start = datetime.now(timezone.utc)
+    start_reqs = client.request_count
+
     async def emit(kind: str, **kwargs):
-        await bus.emit(alias, _evt(kind, operation="sync", sync_run_id=sync_run.id, **kwargs))
+        from analyzer.manager import global_req_tracker
+        reqs_done = client.request_count - start_reqs
+        sync_run.request_count = reqs_done
+        
+        req_rate = global_req_tracker.get_rate()
+        await bus.emit(alias, _evt(kind, operation="sync", sync_run_id=sync_run.id, req_rate=req_rate, req_count=reqs_done, **kwargs))
 
     try:
         await emit("start", message="Starting sync…")
@@ -186,7 +194,9 @@ async def run_sync(
             
             current = min(i + BATCH_SIZE_HYDRATE, total)
             pct = int(current / total * 100)
-            await emit("progress", message=f"Hydrating profiles ({current}/{total})…", pct=pct)
+            
+            handle = detailed_batch[0].handle if detailed_batch else "..."
+            await emit("progress", message=f"Hydrating: @{handle} ({current}/{total})…", pct=pct)
 
         # ── 2.5.1 Fast pass: Update relationship status and promote stubs ─────
         # We do this before analysis so the UI reflects the new graph immediately.

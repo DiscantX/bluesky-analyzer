@@ -55,19 +55,45 @@ def ensure_sqlite_compat_columns() -> None:
 
     conn = sqlite3.connect(DB_PATH)
     try:
-        columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(crawl_queue_items)").fetchall()
-        }
-        additions = {
+        # Update crawl_queue_items
+        columns_q = {row[1] for row in conn.execute("PRAGMA table_info(crawl_queue_items)").fetchall()}
+        additions_q = {
             "cursor": "TEXT",
             "pages_fetched": "INTEGER NOT NULL DEFAULT 0",
             "edges_found": "INTEGER NOT NULL DEFAULT 0",
             "hydrated_at": "TIMESTAMP NULL",
         }
-        for name, sql_type in additions.items():
-            if columns and name not in columns:
+        for name, sql_type in additions_q.items():
+            if columns_q and name not in columns_q:
                 conn.execute(f"ALTER TABLE crawl_queue_items ADD COLUMN {name} {sql_type}")
+
+        # Update crawl_runs
+        columns_r = {row[1] for row in conn.execute("PRAGMA table_info(crawl_runs)").fetchall()}
+        if columns_r and "request_count" not in columns_r:
+            conn.execute("ALTER TABLE crawl_runs ADD COLUMN request_count INTEGER NOT NULL DEFAULT 0")
+            
+        # Update sync_runs
+        columns_sr = {row[1] for row in conn.execute("PRAGMA table_info(sync_runs)").fetchall()}
+        if columns_sr and "request_count" not in columns_sr:
+            conn.execute("ALTER TABLE sync_runs ADD COLUMN request_count INTEGER NOT NULL DEFAULT 0")
+
+        # Update profiles
+        columns_p = {row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()}
+        additions_p = {
+            "description": "TEXT",
+            "banner_url": "TEXT",
+            "account_created_at": "TIMESTAMP NULL",
+            "labels": "TEXT",
+        }
+        for name, sql_type in additions_p.items():
+            if columns_p and name not in columns_p:
+                conn.execute(f"ALTER TABLE profiles ADD COLUMN {name} {sql_type}")
+
+        # Update global_settings
+        columns_gs = {row[1] for row in conn.execute("PRAGMA table_info(global_settings)").fetchall()}
+        if columns_gs and "disable_internal_rate_limits" not in columns_gs:
+            conn.execute("ALTER TABLE global_settings ADD COLUMN disable_internal_rate_limits INT NOT NULL DEFAULT 0")
+
         conn.commit()
     finally:
         conn.close()

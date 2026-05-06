@@ -103,21 +103,26 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     session_reqs = 0
     session_found = 0
 
-    async def emit(message: str, pct: int | None = None, **kwargs):
+    async def emit(message: str, pct: int | None = None, req_inc: int = 0):
+        nonlocal session_reqs, session_found
         crawl_run.last_message = message
-        crawl_run.request_count += kwargs.get("req_inc", 0)
-        crawl_run.discovered_count += kwargs.get("found_inc", 0)
-        await crawl_run.save(update_fields=["last_message", "request_count", "discovered_count"])
         
-        elapsed = (datetime.now(timezone.utc) - session_start).total_seconds()
-        req_rate = 0
-        found_rate = 0
-        if elapsed > 2: # Wait a few seconds for stable averages
-            req_rate = round((crawl_run.request_count / elapsed) * 60, 1)
-            found_rate = round((crawl_run.discovered_count / elapsed) * 60, 1)
+        # Update session counters and persist to the run model
+        session_reqs += req_inc
+        crawl_run.request_count = session_reqs
+        crawl_run.discovered_count = session_found
+        
+        from analyzer.manager import global_req_tracker, global_found_tracker
+        req_rate = global_req_tracker.get_rate()
+        found_rate = global_found_tracker.get_rate()
 
         if on_progress:
-            await on_progress(message, pct, req_rate=req_rate, found_rate=found_rate)
+            try:
+                # Attempt to pass extended stats (supported by worker.py)
+                await on_progress(message, pct, req_rate=req_rate, found_rate=found_rate)
+            except TypeError:
+                # Fallback for old-style callers (like api/sync.py) that only accept (msg, pct)
+                await on_progress(message, pct)
 
     await emit("Preparing crawl queue...")
     seeded = await seed_crawl_queue(owner)
@@ -155,7 +160,6 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     rel_tier_by_did = {rel.did: rel.crawl_tier for rel in owner_relationships}
 
     async def process_candidate(item: CrawlQueueItem):
-        nonlocal session_reqs, session_found
         async with crawl_semaphore:
             user = await AccountRelationship.filter(owner=owner, did=item.did).prefetch_related("profile").first()
             if not user:
@@ -235,13 +239,13 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                         target_user = await AccountRelationship.filter(owner=owner, did=target_did).first()
 
                     if target_user.first_seen_at and target_user.first_seen_at >= _now() - timedelta(seconds=5):
+                        from analyzer.manager import global_found_tracker
+                        global_found_tracker.record()
                         session_found += 1
 
                     # We will update in_subgraph_degree in a batch after hydration
                     await enqueue_crawl_user(owner, target_user)
 
-                hydration_reqs = math.ceil(len(page_dids) / 25)
-                session_reqs += hydration_reqs
                 await hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit)
                 
                 # Recalculate degree for the batch
@@ -262,7 +266,6 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     cursor = item.cursor if direction == "follows" else None
                     while True:
                         data = await public_fetch_graph(user.did, direction, cursor=cursor)
-                        session_reqs += 1
                         batch = data.get(direction, [])
                         if batch:
                             await process_page(batch, direction)
@@ -276,7 +279,11 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                         await item.save(update_fields=["cursor", "pages_fetched", "edges_found"])
 
                         if not next_cursor or not batch:
+                            # Finalize progress with the request count increment
+                            await emit(f"Finished {direction} from @{user_profile.handle}", req_inc=1)
                             break
+                        
+                        await emit(f"Fetching {direction} from @{user_profile.handle}...", req_inc=1)
                         cursor = next_cursor
                     if not settings.disable_internal_rate_limits:
                         await asyncio.sleep(0.1)
@@ -299,7 +306,8 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             item.completed_at = _now()
             await item.save(update_fields=["status", "cursor", "completed_at"])
             crawl_run.candidates_completed += 1
-            await crawl_run.save(update_fields=["candidates_completed"])
+            # Persist progress to DB only when a candidate is finished
+            await crawl_run.save(update_fields=["candidates_completed", "request_count", "discovered_count", "last_message"])
 
     # Process all candidates concurrently
     tasks = [process_candidate(item) for item in candidates]
@@ -458,7 +466,9 @@ async def hydrate_stubs(owner: SavedAccount, dids: list[str], semaphore: asyncio
         if on_progress:
             current = min(i + BATCH_SIZE, total)
             pct = int((current / total) * 100)
-            await on_progress(f"Hydrating profiles ({current}/{total})...", pct)
+            first_handle = profiles[0].get("handle", "...") if profiles else "..."
+            # Pass req_inc=1 to track the batch fetch
+            await on_progress(f"Hydrating: @{first_handle} ({current}/{total})...", pct, req_inc=1)
 
     return hydrated
 

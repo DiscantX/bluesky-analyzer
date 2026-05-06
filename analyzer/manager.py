@@ -1,10 +1,29 @@
 import asyncio
-from typing import Dict, Set, Any
+import time
+from typing import Dict, Set, Any, List
 
 # Shared state for running sync/crawl tasks across API and Background Worker.
 # Keys are operation-aware, for example "main:sync" and "main:crawl".
 running_tasks: Dict[str, asyncio.Task] = {}
 
+
+class RateTracker:
+    """Tracks event counts over a sliding window to compute real-time rates."""
+    def __init__(self):
+        self.history: List[tuple[float, int]] = []
+
+    def record(self, count: int = 1):
+        self.history.append((time.time(), count))
+
+    def get_rate(self, window_seconds: int = 60) -> float:
+        now = time.time()
+        # Purge old history
+        self.history = [h for h in self.history if h[0] > now - window_seconds]
+        return round(sum(h[1] for h in self.history), 1)
+
+
+global_req_tracker = RateTracker()
+global_found_tracker = RateTracker()
 
 def task_key(alias: str, operation: str) -> str:
     return f"{alias}:{operation}"

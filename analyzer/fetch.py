@@ -141,6 +141,9 @@ async def public_fetch_profiles(dids: list[str]) -> list[dict]:
     async with httpx.AsyncClient(timeout=30.0) as client:
         for i in range(0, len(dids), 25):
             batch = dids[i:i + 25]
+            from analyzer.manager import global_req_tracker
+            global_req_tracker.record()
+            
             params = [("actors", did) for did in batch]
             try:
                 resp = await client.get(

@@ -454,7 +454,7 @@ function renderAccountPills() {
 async function fetchStats() {
   if (!state.activeAlias) return;
   try {
-    state.stats = await api(`/api/users/${state.activeAlias}/stats`);
+    state.stats = await api(`/api/users/${encodeURIComponent(state.activeAlias)}/stats`);
     renderStats();
     renderNav();
   } catch (e) {
@@ -483,6 +483,7 @@ async function fetchUsers(append = false, silent = false) {
   }
 
   if (state.filters.search) params.set("search", state.filters.search);
+  
   params.set("sort_by", state.sort.by);
   params.set("sort_dir", state.sort.dir);
   params.set("limit", limit);
@@ -522,7 +523,7 @@ async function fetchUsers(append = false, silent = false) {
   }
 
   try {
-    const data = await api(`/api/users/${state.activeAlias}?${params}`);
+    const data = await api(`/api/users/${encodeURIComponent(state.activeAlias)}?${params}`);
     
     if (append) {
       state.users = [...state.users, ...data.users];
@@ -549,9 +550,13 @@ async function refresh() {
 async function reconcileOperationStatus() {
   if (!state.activeAlias) return;
   try {
-    const status = await api(`/api/sync/${state.activeAlias}/status`);
+    const status = await api(`/api/sync/${encodeURIComponent(state.activeAlias)}/status`);
     const sync = status.sync;
     const crawl = status.crawl;
+
+    if (status.req_rate !== undefined) state.stats.req_rate = status.req_rate;
+    if (status.found_rate !== undefined) state.stats.found_rate = status.found_rate;
+    renderStats();
 
     if (sync?.status === "running" && status.sync_running && !state.syncing) {
       state.syncing = true;
@@ -570,9 +575,13 @@ async function reconcileOperationStatus() {
     if (crawl?.status === "running" && crawl?.is_running) {
       state.crawling = true;
       showSyncBar(crawl.last_message || "Expanding network (Discovery)…", null);
-      if (!state.crawlStream) attachCrawlStream();
+      
+      // Update rates from polling status
+      if (crawl.req_rate !== undefined) state.stats.req_rate = crawl.req_rate;
+      if (crawl.found_rate !== undefined) state.stats.found_rate = crawl.found_rate;
       renderStats();
-    } else if (!crawl?.is_running && state.crawling) {
+
+      if (!state.crawlStream) attachCrawlStream();
       state.crawling = false;
       if (state.crawlStream) {
         state.crawlStream.close();
@@ -662,7 +671,7 @@ async function switchAccount(alias) {
 async function toggleAutoCrawl(enabled) {
   if (!state.activeAlias) return;
   try {
-    await api(`/api/accounts/${state.activeAlias}/settings?auto_crawl=${enabled}`, { method: "PATCH" });
+    await api(`/api/accounts/${encodeURIComponent(state.activeAlias)}/settings?auto_crawl=${enabled}`, { method: "PATCH" });
     const acc = state.accounts.find(a => a.alias === state.activeAlias);
     if (acc) acc.auto_crawl_enabled = enabled;
     toast(`Auto-crawl ${enabled ? "enabled" : "disabled"} for ${state.activeAlias}`);
@@ -682,7 +691,7 @@ async function startSync() {
   showSyncBar("Starting sync…", 0);
 
   try {
-    await api(`/api/sync/${state.activeAlias}`, { method: "POST" });
+    await api(`/api/sync/${encodeURIComponent(state.activeAlias)}`, { method: "POST" });
   } catch (e) {
     if (e.status !== 409) {
         logError("startSync failed:", e);
@@ -702,7 +711,7 @@ function attachSyncStream() {
     state.syncStream.close();
   }
 
-  const es = new EventSource(`/api/sync/${state.activeAlias}/stream?operation=sync`);
+  const es = new EventSource(`/api/sync/${encodeURIComponent(state.activeAlias)}/stream?operation=sync`);
   state.syncStream = es;
 
   es.onmessage = (evt) => {
@@ -777,7 +786,7 @@ async function startCrawl() {
   showSyncBar("Expanding network (Discovery)…", 0);
 
   try {
-    await api(`/api/sync/${state.activeAlias}/crawl`, { method: "POST" });
+    await api(`/api/sync/${encodeURIComponent(state.activeAlias)}/crawl`, { method: "POST" });
   } catch (e) {
     if (e.status !== 409) {
         logError("startCrawl failed:", e);
@@ -797,7 +806,7 @@ function attachCrawlStream() {
     state.crawlStream.close();
   }
 
-  const es = new EventSource(`/api/sync/${state.activeAlias}/stream?operation=crawl`);
+  const es = new EventSource(`/api/sync/${encodeURIComponent(state.activeAlias)}/stream?operation=crawl`);
   state.crawlStream = es;
   es.onmessage = (evt) => {
     const data = JSON.parse(evt.data);
@@ -846,7 +855,7 @@ function attachCrawlStream() {
 async function stopCrawl() {
   if (!state.activeAlias) return;
   try {
-    await api(`/api/sync/${state.activeAlias}/crawl/stop`, { method: "POST" });
+    await api(`/api/sync/${encodeURIComponent(state.activeAlias)}/crawl/stop`, { method: "POST" });
     toast("Crawl stopped.");
   } catch (e) {
     logError("stopCrawl failed:", e);
@@ -1406,7 +1415,7 @@ async function saveEditedVariable(ruleId, variableId) {
   if (!variable) return;
 
   try {
-    await api(`/api/filters/${state.activeAlias}/variables/${variableId}`, {
+    await api(`/api/filters/${encodeURIComponent(state.activeAlias)}/variables/${variableId}`, {
       method: "PUT",
       body: JSON.stringify({ name: variable.name, expression_tree: JSON.stringify(newExpression) }),
     });
@@ -1501,7 +1510,7 @@ async function saveCurrentExpressionAsVariable() {
     expression_tree: JSON.stringify(currentMathExpressionForVar),
   };
 
-  await api(`/api/filters/${state.activeAlias}/variables`, {
+  await api(`/api/filters/${encodeURIComponent(state.activeAlias)}/variables`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -1563,10 +1572,10 @@ async function saveFilterSet() {
   };
 
   if (builderState.id) {
-    await api(`/api/filters/${state.activeAlias}/${builderState.id}`, { method: "PUT", body: JSON.stringify(payload) });
+    await api(`/api/filters/${encodeURIComponent(state.activeAlias)}/${builderState.id}`, { method: "PUT", body: JSON.stringify(payload) });
     toast("Filter updated!");
   } else {
-    await api(`/api/filters/${state.activeAlias}`, { method: "POST", body: JSON.stringify(payload) });
+    await api(`/api/filters/${encodeURIComponent(state.activeAlias)}`, { method: "POST", body: JSON.stringify(payload) });
     toast("Filter saved!");
   }
   closeFilterBuilder();
@@ -1576,21 +1585,21 @@ async function saveFilterSet() {
 async function handleDeleteInBuilder() {
   if (!builderState.id) return;
   if (!confirm("Delete this filter?")) return;
-  await api(`/api/filters/${state.activeAlias}/${builderState.id}`, { method: "DELETE" });
+  await api(`/api/filters/${encodeURIComponent(state.activeAlias)}/${builderState.id}`, { method: "DELETE" });
   await loadFilterSets();
   closeFilterBuilder();
 }
 
 async function loadFilterSets() {
   if (!state.activeAlias) return;
-  state.customFilters = await api(`/api/filters/${state.activeAlias}`);
+  state.customFilters = await api(`/api/filters/${encodeURIComponent(state.activeAlias)}`);
   renderCustomFilters();
 }
 
 async function deleteFilterSet(e, id) {
   e.stopPropagation();
   if (!confirm("Delete this filter?")) return;
-  await api(`/api/filters/${state.activeAlias}/${id}`, { method: "DELETE" });
+  await api(`/api/filters/${encodeURIComponent(state.activeAlias)}/${id}`, { method: "DELETE" });
   await loadFilterSets();
 }
 
@@ -1610,7 +1619,7 @@ function updateFilterFieldsWithVariables() {
 async function loadVariables() {
     if (!state.activeAlias) return;
     try {
-        state.variables = await api(`/api/filters/${state.activeAlias}/variables`);
+        state.variables = await api(`/api/filters/${encodeURIComponent(state.activeAlias)}/variables`);
         updateFilterFieldsWithVariables();
         renderVariableList();
     } catch (e) {
@@ -1657,7 +1666,7 @@ function addVariableToFilter(variableName) {
 
 async function deleteVariable(id) {
     if (!confirm("Delete variable? Filters using it will break.")) return;
-    await api(`/api/filters/${state.activeAlias}/variables/${id}`, { method: "DELETE" });
+    await api(`/api/filters/${encodeURIComponent(state.activeAlias)}/variables/${id}`, { method: "DELETE" });
     await loadVariables();
 }
 
