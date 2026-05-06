@@ -326,8 +326,7 @@ def main():
     logger.info(f"Starting Bluesky Analyzer at {url}")
 
     if not args.no_browser:
-        opener = threading.Timer(1.5, lambda: webbrowser.open(url))
-        opener.daemon = True
+        opener = threading.Timer(2.5, lambda: webbrowser.open(url))
         opener.start()
 
     uvicorn.run(

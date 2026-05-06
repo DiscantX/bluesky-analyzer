@@ -233,6 +233,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 item.last_error = "Tracked user no longer exists."
                 await item.save(update_fields=["status", "completed_at", "last_error"])
                 crawl_run.candidates_skipped += 1
+                await asyncio.sleep(0.001) # Yield to event loop
                 await crawl_run.save(update_fields=["candidates_skipped"])
                 return
 
@@ -245,6 +246,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     item.completed_at = _now()
                     item.last_error = f"Degree {user.in_subgraph_degree} is below threshold."
                     await item.save(update_fields=["status", "completed_at", "last_error"])
+                    await asyncio.sleep(0.001) # Yield to event loop
                     crawl_run.candidates_skipped += 1
                     await crawl_run.save(update_fields=["candidates_skipped"])
                     return
@@ -280,6 +282,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
 
                 if new_edges:
                     await FollowEdge.bulk_create(new_edges, ignore_conflicts=True)
+                    await asyncio.sleep(0.001) # Yield to event loop after bulk write
 
                 for f in batch:
                     target_did = f["did"]
@@ -339,6 +342,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
 
                         item.pages_fetched += 1
                         item.edges_found += len(batch)
+                        await asyncio.sleep(0.001) # Yield to event loop before saving
                         await item.save(update_fields=["cursor", "pages_fetched", "edges_found"])
 
                         await emit(f"Fetching {direction} from @{user_profile.handle}...", req_inc=1)
@@ -374,6 +378,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 item.completed_at = _now()
                 item.last_error = str(e)
                 await item.save(update_fields=["status", "completed_at", "last_error"])
+                await asyncio.sleep(0.001) # Yield to event loop
                 crawl_run.candidates_failed += 1
                 await crawl_run.save(update_fields=["candidates_failed"])
                 await emit(f"Failed to expand @{user_profile.handle}: {e}")
@@ -381,11 +386,26 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
 
             user.last_crawled_at = _now()
             await user.save()
+            await asyncio.sleep(0.001) # Yield to event loop
             item.status = "done"
             item.cursor = None
             item.completed_at = _now()
             await item.save(update_fields=["status", "cursor", "completed_at"])
+            await asyncio.sleep(0.001) # Yield to event loop
             crawl_run.candidates_completed += 1
+            
+            # Pass all relevant crawl_run stats to the emit function
+            crawl_stats = {
+                "candidates_queued": crawl_run.candidates_queued,
+                "candidates_completed": crawl_run.candidates_completed,
+                "candidates_failed": crawl_run.candidates_failed,
+                "candidates_skipped": crawl_run.candidates_skipped,
+                "discovered_count": crawl_run.discovered_count,
+                "request_count": crawl_run.request_count,
+                "last_message": crawl_run.last_message,
+                "batch_size": crawl_run.batch_size,
+                "status": crawl_run.status,
+            }
             await crawl_run.save(update_fields=["candidates_completed", "request_count", "discovered_count", "last_message"])
    # Process all candidates concurrently using a shared HTTP client
     async with httpx.AsyncClient(timeout=30.0) as public_client:
@@ -396,6 +416,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     if failures:
         logger.warning(f"{len(failures)} crawl candidates failed for {owner.alias}")
         crawl_run.candidates_failed += len(failures)
+        await asyncio.sleep(0.001) # Yield to event loop
         await crawl_run.save(update_fields=["candidates_failed"])
         await emit(f"{len(failures)} crawl candidates failed; continuing.")
 
@@ -413,6 +434,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     crawl_run.status = "done"
     crawl_run.finished_at = _now()
     crawl_run.last_message = "Crawl complete!"
+    await asyncio.sleep(0.001) # Yield to event loop
     await crawl_run.save(update_fields=["status", "finished_at", "last_message"])
 
 

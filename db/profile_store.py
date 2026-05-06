@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from tortoise.exceptions import IntegrityError
 from db.models import AccountRelationship, Profile, SavedAccount
 
 
@@ -82,8 +83,19 @@ async def upsert_relationship(
         await existing.save()
         return existing
 
-    rel = await AccountRelationship.create(owner=owner, profile=profile, **rel_data)
-    return rel
+    try:
+        rel = await AccountRelationship.create(owner=owner, profile=profile, **rel_data)
+        return rel
+    except IntegrityError:
+        # Race condition: another concurrent worker created this relationship 
+        # between our check and our create call. Fetch and update instead.
+        existing = await AccountRelationship.get(owner=owner, profile=profile)
+        new_tier = rel_data.get("crawl_tier")
+        if new_tier is not None:
+            rel_data["crawl_tier"] = max(existing.crawl_tier, new_tier)
+        existing.update_from_dict(rel_data)
+        await existing.save()
+        return existing
 
 
 async def upsert_profile_relationship(

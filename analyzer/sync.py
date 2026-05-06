@@ -224,6 +224,7 @@ async def run_sync(
         # FIX 1: Use bulk edge creation instead of N get_or_create calls
         await _bulk_upsert_follow_edges(owner_did, follows, followers)
 
+        # No need for asyncio.sleep here, bulk_upsert_follow_edges already yields.
         sync_run.follows_fetched = len(follows)
         sync_run.followers_fetched = len(followers)
         await sync_run.save()

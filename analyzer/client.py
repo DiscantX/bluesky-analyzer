@@ -125,7 +125,16 @@ class BskyClient:
             session_str = self._session_file.read_text().strip()
             if not session_str:
                 return False
-            self._client.import_session_string(session_str)
+            
+            # Some versions of the atproto SDK lack import_session_string
+            # but support passing the string to login directly for resumption.
+            if hasattr(self._client, 'import_session_string'):
+                logger.debug(f"[{self.alias}] Loading session using import_session_string")
+                self._client.import_session_string(session_str)
+            else:
+                logger.debug(f"[{self.alias}] Loading session using login(session_string=...) fallback")
+                self._client.login(session_string=session_str)
+
             logger.info(f"[{self.alias}] Resumed session from disk.")
             return True
         except Exception as e:
@@ -142,11 +151,28 @@ class BskyClient:
         if await loop.run_in_executor(None, self._load_session):
             # Verify the session is still valid with a lightweight call
             try:
-                await self._run(lambda: self._client.get_current_user())
+                # Check session validity by fetching the account's own profile.
+                # handle is available in the login() method scope.
+                await self._run(lambda: self._client.get_profile(actor=handle))
                 logger.info(f"[{self.alias}] Session is valid, skipping login.")
                 return
-            except Exception:
-                logger.info(f"[{self.alias}] Saved session expired, logging in fresh.")
+            except Exception as e:
+                logger.warning(f"[{self.alias}] Session verification failed: {e}")
+
+                # Before giving up, try to refresh the session if we have a refresh token
+                if hasattr(self._client, 'refresh_session'):
+                    try:
+                        logger.info(f"[{self.alias}] Attempting to refresh session...")
+                        await self._run(lambda: self._client.refresh_session())
+                        await loop.run_in_executor(None, self._save_session)
+                        logger.info(f"[{self.alias}] Session refreshed successfully.")
+                        return
+                    except Exception as re:
+                        logger.warning(f"[{self.alias}] Session refresh failed: {re}")
+                
+                logger.info(f"[{self.alias}] Saved session expired or invalid, logging in fresh.")
+        else:
+            logger.info(f"[{self.alias}] No saved session found or load failed, performing fresh login.")
 
         await self._run(lambda: self._client.login(handle, app_password))
         await loop.run_in_executor(None, self._save_session)

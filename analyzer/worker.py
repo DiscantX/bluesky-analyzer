@@ -167,6 +167,10 @@ async def run_auto_sync(account: SavedAccount):
         await client.login(account.handle, password)
         await run_sync(account, client, account.alias)
 
+        # Save session in case it was refreshed during the long sync
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, client._save_session)
+
         account = await SavedAccount.get(id=account.id)
         if account.auto_crawl_enabled:
             await asyncio.sleep(2) # Give the user a moment to see the Sync Complete message
@@ -186,10 +190,12 @@ async def run_auto_crawl(account: SavedAccount):
         if latest_run and latest_run.status == "paused" and latest_run.error_message == "Stopped by user.":
             return
 
-        async def on_prog(msg, pct=None, **kwargs):
+        async def on_prog(msg, pct=None, crawl_stats=None, **kwargs):
             event = {"kind": "progress", "operation": "crawl", "message": f"[Auto] {msg}", **kwargs}
             if pct is not None:
                 event["pct"] = pct
+            if crawl_stats is not None:
+                event["crawl_stats"] = crawl_stats
             await bus.emit(account.alias, event)
 
         await crawl_step(account, batch_size=20, on_progress=on_prog)
@@ -255,6 +261,10 @@ async def run_auto_discovery_analysis(account: SavedAccount):
             data["last_analyzed_at"] = datetime.now(timezone.utc)
             await upsert_profile_relationship(account, data)
             
+        # Save session in case it was refreshed during discovery
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, client._save_session)
+
     except asyncio.CancelledError:
         raise
     except Exception as e:
