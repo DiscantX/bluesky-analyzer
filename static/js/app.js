@@ -987,6 +987,7 @@ const SETTINGS_KEYS = [
   // Graph
   "clustering_top_n",
   "louvain_max_nodes",
+  "louvain_resolution",
 ];
  
 // Snapshot of values as loaded from the server — used for dirty detection

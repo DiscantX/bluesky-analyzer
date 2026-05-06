@@ -12,7 +12,7 @@ import networkx as nx
 from datetime import datetime, timezone, timedelta
 from networkx.algorithms.link_analysis.pagerank_alg import _pagerank_python
 from typing import Dict, Any
-from tortoise import connections
+from tortoise import connections, transactions
 from db.models import AccountRelationship, FollowEdge, SavedAccount, CommunityMetadata, GlobalSettings, Profile
 from analyzer.client import get_client
 from analyzer.analyze import build_tracked_user_data, STOP_WORDS
@@ -20,7 +20,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from analyzer.fetch import fetch_feeds_concurrent, fetch_all_follows, fetch_all_followers
 
 logger = logging.getLogger(__name__)
-SQLITE_IN_CHUNK = 400
+SQLITE_IN_CHUNK = 32766  # SQLite parameter limit (SQLITE_MAX_VARIABLE_NUMBER) is 32,766
 CLUSTERING_TOP_N = 1000
 FULL_LOUVAIN_MAX_NODES = 10000
 
@@ -34,10 +34,6 @@ async def run_graph_analysis(owner: SavedAccount, on_progress=None):
     Orchestrates the graph metric computation for a specific account.
     Loads edges, builds a NetworkX graph, computes metrics, and persists them.
     """
-    logger.info(f"Starting graph analysis for {owner.handle}...")
-    if on_progress:
-        await on_progress("Building social graph...", 5)
-    
     # 1. Get all nodes in the local universe for this owner
     relationships = await AccountRelationship.filter(owner=owner).all()
     tracked_dids = {rel.did for rel in relationships}
@@ -51,57 +47,85 @@ async def run_graph_analysis(owner: SavedAccount, on_progress=None):
 
     # 3. Build graph
     G = nx.DiGraph()
-    G.add_nodes_from(tracked_dids)
+    G.add_nodes_from(graph_nodes)
     graph_node_list = list(graph_nodes)
+    total_nodes = len(graph_node_list)
+    nodes_processed = 0
     edge_count = 0
     for did_batch in _chunks(graph_node_list):
-        edges = await FollowEdge.filter(follower_did__in=did_batch).all()
-        for edge in edges:
-            if edge.followee_did in graph_nodes:
-                G.add_edge(edge.follower_did, edge.followee_did)
+        # Optimization: use values_list to avoid expensive ORM object instantiation
+        edges = await FollowEdge.filter(follower_did__in=did_batch).values_list("follower_did", "followee_did")
+        for f_did, t_did in edges:
+            if t_did in graph_nodes:
+                G.add_edge(f_did, t_did)
                 edge_count += 1
+        nodes_processed += len(did_batch)
+        if on_progress:
+            pct = 5 + int((nodes_processed / total_nodes) * 15)
+            await on_progress(f"Building social graph ({nodes_processed}/{total_nodes} nodes)...", pct)
 
     if G.number_of_nodes() == 0:
         return
 
-    if on_progress:
-        await on_progress(f"Computing metrics ({G.number_of_nodes()} nodes)...", 20)
+    settings = await GlobalSettings.get(id=1)
 
     # 4. Compute metrics in a thread pool to avoid blocking the event loop
     loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(None, _compute_metrics_sync, G)
+
+    if on_progress:
+        await on_progress(f"Computing FlowRank ({G.number_of_nodes()} nodes)...", 20)
+    pr = await loop.run_in_executor(None, _compute_pagerank, G)
+
+    if on_progress:
+        await on_progress(f"Detecting communities ({G.number_of_nodes()} nodes)...", 30)
+    undirected = await loop.run_in_executor(None, G.to_undirected)
+    communities = await loop.run_in_executor(None, _compute_communities, undirected, settings.louvain_resolution, G.number_of_nodes())
+    
+    community_map = {}
+    for i, community_nodes in enumerate(communities):
+        for did in community_nodes:
+            community_map[did] = i
+
+    if on_progress:
+        await on_progress(f"Computing clustering (top {CLUSTERING_TOP_N})...", 40)
+    clustering = await loop.run_in_executor(None, _compute_clustering, undirected, pr)
 
     # 5. Persist back to DB. Use executemany because saving tens of thousands
     # of rows one-by-one makes sync shutdown and Ctrl+C feel wedged.
     updates = []
     for rel in relationships:
-        metrics = results.get(rel.did)
-        if metrics:
-            updates.append((
-                metrics.get("flowrank"),
-                metrics.get("community"),
-                metrics.get("in_degree", 0),
-                metrics.get("clustering"),
-                rel.id,
-            ))
+        updates.append((
+            pr.get(rel.did),
+            community_map.get(rel.did),
+            G.in_degree(rel.did),
+            clustering.get(rel.did),
+            rel.id,
+        ))
 
     if on_progress:
         await on_progress("Persisting results...", 50)
 
+    total_updates = len(updates)
+    updates_processed = 0
     if updates:
-        conn = connections.get("default")
-        for batch in _chunks(updates, SQLITE_IN_CHUNK):
-            await conn.execute_many(
-                """
-                UPDATE account_relationships
-                SET flowrank_score = ?,
-                    community_id = ?,
-                    in_subgraph_degree = ?,
-                    clustering_coefficient = ?
-                WHERE id = ?
-                """,
-                batch,
-            )
+        # Optimization: wrap in a transaction to perform a single commit for all chunks
+        async with transactions.in_transaction("default") as conn:
+            for batch in _chunks(updates, SQLITE_IN_CHUNK):
+                await conn.execute_many(
+                    """
+                    UPDATE account_relationships
+                    SET flowrank_score = ?,
+                        community_id = ?,
+                        in_subgraph_degree = ?,
+                        clustering_coefficient = ?
+                    WHERE id = ?
+                    """,
+                    batch,
+                )
+                updates_processed += len(batch)
+                if on_progress:
+                    pct = 50 + int((updates_processed / total_updates) * 20)
+                    await on_progress(f"Persisting results ({updates_processed}/{total_updates})...", pct)
 
     # NEW STEP: Ensure top keywords are populated for key community members
     await _ensure_community_keywords(owner, on_progress=on_progress)
@@ -256,6 +280,8 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
 
     dids_to_reanalyze = []
     profiles_to_reanalyze = {} # Store profile objects to pass to build_tracked_user_data
+    did_to_community = {} # Map DIDs to community IDs for accurate logging
+
 
     # Determine which profiles need re-analysis
     now = datetime.now(timezone.utc)
@@ -267,6 +293,7 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
         profile_id = member["profile_id"]
         last_analyzed_at = member["last_analyzed_at"]
         top_keywords = member["top_keywords"]
+        did_to_community[did] = member["community_id"]
 
         needs_reanalysis = False
         if not top_keywords: # Keywords are missing
@@ -291,6 +318,7 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
 
     total_reanalyze = len(dids_to_reanalyze)
     completed = 0
+    updated_profiles = []
     client = await get_client(owner)
 
     owner_follows_list = await fetch_all_follows(client, owner.handle)
@@ -322,71 +350,52 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
 
         profile_obj.top_keywords = data["top_keywords"]
         profile_obj.last_analyzed_at = data["last_analyzed_at"]
-        await profile_obj.save()
-        # member is the dictionary from the top_members list in the outer loop
-        cid = member.get('community_id', 'N/A')
-        logger.debug(f"Updated keywords for {profile_obj.handle} (Community {cid})")
+        updated_profiles.append(profile_obj)
         
         if on_progress and completed % 5 == 0:
-            pct = 50 + int((completed / total_reanalyze) * 40) # 50% to 90%
+            pct = 70 + int((completed / total_reanalyze) * 20) # 70% to 90%
             await on_progress(f"Community keywords: {completed}/{total_reanalyze}...", pct)
+
+    if updated_profiles:
+        # Perform a single bulk update to save all analyzed profiles at once,
+        # dramatically reducing the number of SQLite transactions.
+        await Profile.bulk_update(updated_profiles, fields=["top_keywords", "last_analyzed_at"])
+        for p in updated_profiles:
+            logger.debug(f"Updated keywords for {p.handle} (Community {did_to_community.get(p.did, 'N/A')})")
 
     logger.info(f"Finished keyword re-analysis for key community members for {owner.handle}.")
 
-def _compute_metrics_sync(G: nx.DiGraph) -> Dict[str, Dict[str, Any]]:
-    """Synchronous NetworkX logic running in a thread pool."""
-    # FlowRank (PageRank)
+def _compute_pagerank(G: nx.DiGraph):
     try:
-        # alpha=0.85 is standard; weight=None because we treat all follows equally
-        pr = nx.pagerank(G, alpha=0.85)
+        return nx.pagerank(G, alpha=0.85)
     except Exception as e:
         logger.warning(f"FlowRank fast computation failed, using pure-Python fallback: {e}")
         try:
-            pr = _pagerank_python(G, alpha=0.85)
+            return _pagerank_python(G, alpha=0.85)
         except Exception as fallback_error:
             logger.error(f"FlowRank computation failed: {fallback_error}")
-            pr = {}
+            return {}
 
-    undirected = G.to_undirected()
-
-    # Community Detection. Louvain is useful but expensive; for larger graphs,
-    # connected components are a fast coarse fallback until metrics are moved
-    # into an incremental/background job.
+def _compute_communities(undirected: nx.Graph, resolution: float, node_count: int):
     try:
-        if G.number_of_nodes() <= FULL_LOUVAIN_MAX_NODES:
-            communities = nx.community.louvain_communities(undirected, seed=42)
-        elif G.number_of_nodes() <= 500000:
-            # Label propagation is linear O(E) and handles our current scale easily
-            communities = nx.community.label_propagation_communities(undirected)
+        if node_count <= FULL_LOUVAIN_MAX_NODES:
+            return nx.community.louvain_communities(undirected, seed=42, resolution=resolution)
+        elif node_count <= 500000:
+            return nx.community.label_propagation_communities(undirected)
         else:
-            communities = nx.connected_components(undirected) # Last resort for millions
-        community_map = {}
-        for i, community_nodes in enumerate(communities):
-            for did in community_nodes:
-                community_map[did] = i
+            return nx.connected_components(undirected)
     except Exception as e:
         logger.error(f"Community detection failed: {e}")
-        community_map = {}
+        return []
 
-    # Clustering coefficient is expensive for all nodes. Compute it for the
-    # highest-FlowRank nodes only, matching PROJECT.md's planned top-N approach.
-    clustering = {}
+def _compute_clustering(undirected: nx.Graph, pr: Dict):
     try:
-        top_nodes = [
+       top_nodes = [
             node
             for node, _ in sorted(pr.items(), key=lambda item: item[1], reverse=True)[:CLUSTERING_TOP_N]
         ]
-        clustering = nx.clustering(undirected, nodes=top_nodes)
+       return nx.clustering(undirected, nodes=top_nodes)
+     
     except Exception as e:
         logger.error(f"Clustering computation failed: {e}")
-    
-    # Prepare results map
-    return {
-        node: {
-            "flowrank": pr.get(node),
-            "community": community_map.get(node),
-            "in_degree": G.in_degree(node),
-            "clustering": clustering.get(node)
-        }
-        for node in G.nodes()
-    }
+        return {}

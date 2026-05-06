@@ -172,6 +172,7 @@ def ensure_sqlite_compat_columns() -> None:
             # Graph metrics
             "clustering_top_n":     "INTEGER NOT NULL DEFAULT 1000",
             "louvain_max_nodes":    "INTEGER NOT NULL DEFAULT 10000",
+            "louvain_resolution":   "REAL NOT NULL DEFAULT 1.0",
         }
 
         columns_gs = {row[1] for row in conn.execute("PRAGMA table_info(global_settings)").fetchall()}

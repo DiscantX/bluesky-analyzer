@@ -60,6 +60,7 @@ class GlobalSettings(Model):
     # ── Graph metrics ─────────────────────────────────────────────────────────
     clustering_top_n    = fields.IntField(default=1000)
     louvain_max_nodes   = fields.IntField(default=10000)
+    louvain_resolution  = fields.FloatField(default=1.0)
 
     class Meta:
         table = "global_settings"

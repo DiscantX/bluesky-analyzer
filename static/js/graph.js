@@ -192,7 +192,10 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
       .linkDirectionalParticleWidth(1)
       .linkDirectionalParticleColor(CONFIG.particleColor)
       .backgroundColor('#0c0e14')
-      .linkVisibility(link => currentGraphMode !== 'community_overview')
+      .linkVisibility(link => {
+          if (currentGraphMode === 'community_overview') return true;
+          return !selectedNode || link.source === selectedNode || link.target === selectedNode;
+      })
       .onNodeClick(node => {
         const now = Date.now();
         if (now - lastClickTime < 300 && lastClickedNode === node) {
@@ -217,8 +220,17 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
       .onBackgroundClick(deselectNode);
 
     // Adjust forces
-    graph.d3Force('charge').strength(-120);
+    graph.d3Force('charge').strength(node => {
+        // Stronger repulsion for community meta-nodes to prevent blobs
+        return node.type === 'community_meta' ? -1000 : -150;
+    });
+    
     graph.d3Force('link').distance(50);
+    
+    // Community Gravity: push different communities apart
+    if (currentGraphMode === 'macro') {
+        graph.d3Force('collide', d3.forceCollide(node => Math.sqrt(node.rank) * 100 + 5));
+    }
 
     // Pre-selection and Centering Logic for drill-downs (UX Improvement)
     if (spawnAt) {
