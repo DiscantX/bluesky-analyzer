@@ -551,6 +551,19 @@ async function refresh() {
 
 async function reconcileOperationStatus() {
   if (!state.activeAlias) return;
+
+  // Always refresh stats, even during active operations.
+  // The stream is not reliably emitting account_stats on every event.
+  try {
+    const freshStats = await api(`/api/users/${encodeURIComponent(state.activeAlias)}/stats`);
+    state.stats = { ...state.stats, ...freshStats };
+    renderStats();
+    renderNav();
+  } catch (e) { /* ignore polling errors */ }
+
+  // Skip stream reconnection logic if already attached.
+  if (state.syncing || state.crawling) return;
+
   try {
     const status = await api(`/api/sync/${encodeURIComponent(state.activeAlias)}/status`);
     const sync = status.sync;
@@ -716,12 +729,20 @@ function attachSyncStream() {
   const es = new EventSource(`/api/sync/${encodeURIComponent(state.activeAlias)}/stream?operation=sync`);
   state.syncStream = es;
 
-  es.onmessage = (evt) => {
+es.onmessage = (evt) => {
     const data = JSON.parse(evt.data);
 
     if (data.kind === "progress") {
+      // Skip heartbeat HTTP log messages.
+      if (data.is_heartbeat) return;
+      
       showSyncBar(data.message, data.pct);
-      fetchStats();
+      
+      if (data.account_stats) {
+        state.stats = { ...state.stats, ...data.account_stats };
+        renderStats();
+        renderNav();
+      }
       // Throttle user list updates during sync to once every 2 seconds
       if (Date.now() - state.lastUserFetch > 2000) {
         fetchUsers(false, true);
@@ -810,16 +831,32 @@ function attachCrawlStream() {
 
   const es = new EventSource(`/api/sync/${encodeURIComponent(state.activeAlias)}/stream?operation=crawl`);
   state.crawlStream = es;
-  es.onmessage = (evt) => {
+es.onmessage = (evt) => {
     const data = JSON.parse(evt.data);
     if (data.kind === "progress" || data.kind === "phase") {
-      showSyncBar(data.message, data.pct ?? null);
+   
+      // Skip heartbeat HTTP log messages — they're connection keepalives, not UI updates.
+      if (data.is_heartbeat) return;
+      
+      // Use crawl_stats to enrich the progress message (e.g. "[5/100] Expanding network...")
+      let msg = data.message;
+      if (data.crawl_stats) {
+        const cs = data.crawl_stats;
+        const progress = cs.candidates_queued > 0 ? `[${cs.candidates_completed}/${cs.candidates_queued}] ` : "";
+        msg = progress + data.message;
+      }
+      showSyncBar(msg, data.pct ?? null);
       
       // Update ephemeral rates in state for rendering
       if (data.req_rate !== undefined) state.stats.req_rate = data.req_rate;
       if (data.found_rate !== undefined) state.stats.found_rate = data.found_rate;
       
-      fetchStats();
+      if (data.account_stats) {
+        state.stats = { ...state.stats, ...data.account_stats };
+        renderStats();
+        renderNav();
+      }
+
       if (Date.now() - state.lastUserFetch > 2000) {
         fetchUsers(false, true);
       }

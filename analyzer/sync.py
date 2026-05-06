@@ -197,11 +197,13 @@ async def run_sync(
 
     async def emit(kind: str, **kwargs):
         from analyzer.manager import global_req_tracker
+        from db.queries import get_stats
         reqs_done = client.request_count - start_reqs
         sync_run.request_count = reqs_done
 
         req_rate = global_req_tracker.get_rate()
-        await bus.emit(alias, _evt(kind, operation="sync", sync_run_id=sync_run.id, req_rate=req_rate, req_count=reqs_done, **kwargs))
+        account_stats = await get_stats(saved_account.id)
+        await bus.emit(alias, _evt(kind, operation="sync", sync_run_id=sync_run.id, req_rate=req_rate, req_count=reqs_done, account_stats=account_stats, **kwargs))
 
     try:
         await emit("start", message="Starting sync…")
