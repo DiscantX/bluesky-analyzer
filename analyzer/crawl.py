@@ -13,6 +13,7 @@ import logging
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
+import httpx
 from tortoise.expressions import Q
 from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem, GlobalSettings
 from db.profile_store import upsert_profile_relationship
@@ -219,7 +220,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     owner_relationships = await AccountRelationship.filter(owner=owner).all()
     rel_tier_by_did = {rel.did: rel.crawl_tier for rel in owner_relationships}
 
-    async def process_candidate(item: CrawlQueueItem):
+    async def process_candidate(item: CrawlQueueItem, public_client: httpx.AsyncClient):
         async with crawl_semaphore:
             user = await AccountRelationship.filter(owner=owner, did=item.did).prefetch_related("profile").first()
             if not user:
@@ -305,7 +306,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     await enqueue_crawl_user(owner, target_user)
 
                 all_discovered_dids.extend(page_dids)
-                await hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit)
+                await hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit, client=public_client)
 
                 # FIX 4: Degree update is now deferred to a single batch call
                 # after all pages are processed (see below). The per-page call
@@ -319,11 +320,11 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 # This delivers ~1-2x speedup per candidate, especially for accounts
                 # with many followers.
 
-                async def fetch_direction_pages(direction: str, start_cursor: str | None = None):
+                async def fetch_direction_pages(direction: str, start_cursor: str | None = None, c: httpx.AsyncClient = None):
                     """Paginate one direction fully and process each page."""
                     cursor = start_cursor
                     while True:
-                        data = await public_fetch_graph(user.did, direction, cursor=cursor)
+                        data = await public_fetch_graph(user.did, direction, cursor=cursor, client=c)
                         batch = data.get(direction, [])
                         if batch:
                             await process_page(batch, direction)
@@ -349,8 +350,8 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 # Run both directions concurrently
                 start_cursor = item.cursor  # Resume follows from where we left off
                 await asyncio.gather(
-                    fetch_direction_pages("follows", start_cursor),
-                    fetch_direction_pages("followers", None),
+                    fetch_direction_pages("follows", start_cursor, public_client),
+                    fetch_direction_pages("followers", None, public_client),
                 )
 
                 # FIX 4: Now that all pages across both directions are done,
@@ -382,11 +383,12 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             await item.save(update_fields=["status", "cursor", "completed_at"])
             crawl_run.candidates_completed += 1
             await crawl_run.save(update_fields=["candidates_completed", "request_count", "discovered_count", "last_message"])
-
-    # Process all candidates concurrently
-    tasks = [process_candidate(item) for item in candidates]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    failures = [r for r in results if isinstance(r, Exception)]
+   # Process all candidates concurrently using a shared HTTP client
+    async with httpx.AsyncClient(timeout=30.0) as public_client:
+        tasks = [process_candidate(item, public_client) for item in candidates]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        failures = [r for r in results if isinstance(r, Exception)]
+        
     if failures:
         logger.warning(f"{len(failures)} crawl candidates failed for {owner.alias}")
         crawl_run.candidates_failed += len(failures)
@@ -485,7 +487,13 @@ async def claim_crawl_items(owner: SavedAccount, batch_size: int) -> list[CrawlQ
     return items
 
 
-async def hydrate_stubs(owner: SavedAccount, dids: list[str], semaphore: asyncio.Semaphore, on_progress=None) -> int:
+async def hydrate_stubs(
+    owner: SavedAccount, 
+    dids: list[str], 
+    semaphore: asyncio.Semaphore, 
+    on_progress=None,
+    client: httpx.AsyncClient | None = None
+) -> int:
     """Hydrate graph-discovered stubs with public profile counts/avatar data."""
     unique_dids = list(dict.fromkeys(dids))
     if not unique_dids:
@@ -499,7 +507,11 @@ async def hydrate_stubs(owner: SavedAccount, dids: list[str], semaphore: asyncio
     for i in range(0, total, BATCH_SIZE):
         batch_dids = unique_dids[i : i + BATCH_SIZE]
         async with semaphore:
-            profiles = await public_fetch_profiles(batch_dids)
+            profiles = await public_fetch_profiles(batch_dids, client=client)
+
+        profiles_to_update = []
+        relationships_to_update = []
+        queue_items_to_update = []
 
         for profile in profiles:
             did = profile.get("did")
@@ -524,18 +536,36 @@ async def hydrate_stubs(owner: SavedAccount, dids: list[str], semaphore: asyncio
             shared_profile.account_created_at = parse_dt(profile.get("createdAt"))
             shared_profile.labels = json.dumps([l.get("val") for l in profile.get("labels", [])]) if profile.get("labels") else None
             shared_profile.last_hydrated_at = hydrated_at
-            await shared_profile.save()
+            profiles_to_update.append(shared_profile)
+
             user.crawl_pending_fields = json.dumps(["feed_sample", "relationship_flags"])
             user.crawl_priority = await calculate_priority(user)
-            await user.save()
+            relationships_to_update.append(user)
 
             item = await CrawlQueueItem.filter(account=owner, did=did).first()
             if item:
                 item.handle = handle
                 item.priority = user.crawl_priority
                 item.hydrated_at = hydrated_at
-                await item.save(update_fields=["handle", "priority", "hydrated_at"])
+                queue_items_to_update.append(item)
+
             hydrated += 1
+
+        if profiles_to_update:
+            await Profile.bulk_update(profiles_to_update, fields=[
+                "handle", "display_name", "avatar_url", "profile_url", 
+                "followers_count", "follows_count", "posts_count", 
+                "description", "banner_url", "account_created_at", 
+                "labels", "last_hydrated_at"
+            ])
+        if relationships_to_update:
+            await AccountRelationship.bulk_update(relationships_to_update, fields=[
+                "crawl_pending_fields", "crawl_priority"
+            ])
+        if queue_items_to_update:
+            await CrawlQueueItem.bulk_update(queue_items_to_update, fields=[
+                "handle", "priority", "hydrated_at"
+            ])
 
         if on_progress:
             current = min(i + BATCH_SIZE, total)

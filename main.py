@@ -41,6 +41,13 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
     datefmt="%H:%M:%S",
 )
+# Silence noise from libraries. The httpx logs for public getProfiles 
+# batch requests are massive and can become a synchronous bottleneck 
+# when writing to a slow terminal.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -96,6 +103,8 @@ def ensure_sqlite_compat_columns() -> None:
             if "disable_internal_rate_limits" not in columns_gs:
                 conn.execute("ALTER TABLE global_settings ADD COLUMN disable_internal_rate_limits INT NOT NULL DEFAULT 0")
             # FIX 5: Add feed_fetch_concurrency to existing databases.
+            if "ignore_staleness_threshold_days" not in columns_gs:
+                conn.execute("ALTER TABLE global_settings ADD COLUMN ignore_staleness_threshold_days INTEGER NOT NULL DEFAULT 0")
             # Default 15 (3x the old hardcoded 5).
             if "feed_fetch_concurrency" not in columns_gs:
                 conn.execute("ALTER TABLE global_settings ADD COLUMN feed_fetch_concurrency INTEGER NOT NULL DEFAULT 15")
@@ -103,6 +112,24 @@ def ensure_sqlite_compat_columns() -> None:
         conn.commit()
     finally:
         conn.close()
+
+# ── CLI Arguments ─────────────────────────────────────────────────────────────
+def parse_cli_args():
+    """
+    Parse CLI arguments at the module level. We use parse_known_args 
+    to ensure that uvicorn workers can import this module without 
+    crashing on uvicorn's own internal CLI flags.
+    """
+    parser = argparse.ArgumentParser(description="Bluesky Analyzer local server")
+    parser.add_argument("--host",       default="127.0.0.1")
+    parser.add_argument("--port",       type=int, default=8000)
+    parser.add_argument("--no-browser", action="store_true", help="Don't automatically open the browser")
+    parser.add_argument("--skip-sync-on-startup", action="store_true", help="Skip syncing accounts.json to DB on startup")
+    parser.add_argument("--ignore-staleness-threshold", type=int, default=0, help="Override staleness threshold for all accounts (in days)")
+    parser.add_argument("--reload",     action="store_true", help="Enable hot-reload (development mode)")
+    
+    args, _ = parser.parse_known_args()
+    return args
 
 # ── Tortoise ORM config ───────────────────────────────────────────────────────
 TORTOISE_CONFIG = {
@@ -129,20 +156,24 @@ async def lifespan(app: FastAPI):
         ensure_sqlite_compat_columns()
         logger.info(f"Database ready at {DB_PATH}")
 
-        # Initialize default settings
+        # Initialize default settings and apply CLI overrides
         from db.models import GlobalSettings, SavedAccount
-        await GlobalSettings.get_or_create(id=1)
+        settings, _ = await GlobalSettings.get_or_create(id=1)
+        if app.state.args.ignore_staleness_threshold > 0:
+            settings.ignore_staleness_threshold_days = app.state.args.ignore_staleness_threshold
+            await settings.save()
 
         # Sync accounts.json -> DB on every startup
-        try:
-            import config as cfg
-            for acc in cfg.list_saved_accounts():
-                await SavedAccount.update_or_create(
-                    defaults={"handle": acc["handle"]},
-                    alias=acc["alias"],
-                )
-        except Exception as e:
-            logger.warning(f"Could not sync accounts.json to DB: {e}")
+        if not app.state.args.skip_sync_on_startup:
+            try:
+                import config as cfg
+                for acc in cfg.list_saved_accounts():
+                    await SavedAccount.update_or_create(
+                        defaults={"handle": acc["handle"]},
+                        alias=acc["alias"],
+                    )
+            except Exception as e:
+                logger.warning(f"Could not sync accounts.json to DB: {e}")
 
         # Start background automation worker
         await worker_module.start_background_worker()
@@ -182,6 +213,10 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+# Initialize args on app.state during module import so lifespan can access them
+# even when running in uvicorn worker processes or reload mode.
+app.state.args = parse_cli_args()
 
 # Static files
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -240,14 +275,8 @@ async def favicon():
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="Bluesky Analyzer local server")
-    parser.add_argument("--host",       default="127.0.0.1")
-    parser.add_argument("--port",       type=int, default=8000)
-    parser.add_argument("--no-browser", action="store_true",
-                        help="Don't automatically open the browser")
-    parser.add_argument("--reload",     action="store_true",
-                        help="Enable hot-reload (development mode)")
-    args = parser.parse_args()
+    # Access the arguments already parsed during module import
+    args = app.state.args
 
     url = f"http://{args.host}:{args.port}"
     logger.info(f"Starting Bluesky Analyzer at {url}")
@@ -263,6 +292,7 @@ def main():
         port=args.port,
         reload=args.reload,
         log_level="info",
+        access_log=False,
     )
 
 

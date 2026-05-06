@@ -127,7 +127,8 @@ async def public_fetch_graph(
     actor_did: str,
     collection: str = "follows",
     limit: int = 100,
-    cursor: str | None = None
+    cursor: str | None = None,
+    client: httpx.AsyncClient | None = None
 ) -> dict:
     """
     Fetch follows or followers using the unauthenticated public AppView.
@@ -138,13 +139,18 @@ async def public_fetch_graph(
     if cursor:
         params["cursor"] = cursor
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    if client:
         resp = await client.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=30.0) as new_client:
+            resp = await new_client.get(url, params=params)
+            resp.raise_for_status()
+            return resp.json()
 
 
-async def public_fetch_profiles(dids: list[str]) -> list[dict]:
+async def public_fetch_profiles(dids: list[str], client: httpx.AsyncClient | None = None) -> list[dict]:
     """
     Fetch public profile details from AppView in batches of 25.
 
@@ -153,7 +159,7 @@ async def public_fetch_profiles(dids: list[str]) -> list[dict]:
     """
     settings = await GlobalSettings.get(id=1)
     results = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async def _fetch_batch(c: httpx.AsyncClient):
         for i in range(0, len(dids), 25):
             batch = dids[i:i + 25]
             from analyzer.manager import global_req_tracker
@@ -161,7 +167,7 @@ async def public_fetch_profiles(dids: list[str]) -> list[dict]:
 
             params = [("actors", did) for did in batch]
             try:
-                resp = await client.get(
+                resp = await c.get(
                     "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles",
                     params=params,
                 )
@@ -171,27 +177,44 @@ async def public_fetch_profiles(dids: list[str]) -> list[dict]:
                 logger.error(f"Public profile hydration failed: {e}")
             if not settings.disable_internal_rate_limits:
                 await asyncio.sleep(_POLITE_DELAY)
+                
+    if client:
+        await _fetch_batch(client)
+    else:
+        async with httpx.AsyncClient(timeout=30.0) as new_client:
+            await _fetch_batch(new_client)
+            
     return results
 
 
-async def fetch_all_graph_public(actor_did: str, collection: str = "follows", on_page=None) -> list[dict]:
+async def fetch_all_graph_public(
+    actor_did: str, 
+    collection: str = "follows", 
+    on_page=None, 
+    client: httpx.AsyncClient | None = None
+) -> list[dict]:
     """Paginate through the public graph endpoint."""
     settings = await GlobalSettings.get(id=1)
     results = []
     cursor = None
-    while True:
-        try:
-            data = await public_fetch_graph(actor_did, collection, cursor=cursor)
-            batch = data.get(collection, [])
-            results.extend(batch)
-            if on_page:
-                await on_page(batch)
-            cursor = data.get("cursor")
-            if not cursor or not batch:
+    
+    async def _run(c: httpx.AsyncClient | None):
+        nonlocal cursor
+        while True:
+            try:
+                data = await public_fetch_graph(actor_did, collection, cursor=cursor, client=c)
+                batch = data.get(collection, [])
+                results.extend(batch)
+                if on_page:
+                    await on_page(batch)
+                cursor = data.get("cursor")
+                if not cursor or not batch:
+                    break
+                if not settings.disable_internal_rate_limits:
+                    await asyncio.sleep(_POLITE_DELAY)
+            except Exception as e:
+                logger.error(f"Public fetch failed for {actor_did} {collection}: {e}")
                 break
-            if not settings.disable_internal_rate_limits:
-                await asyncio.sleep(_POLITE_DELAY)
-        except Exception as e:
-            logger.error(f"Public fetch failed for {actor_did} {collection}: {e}")
-            break
+
+    await _run(client)
     return results

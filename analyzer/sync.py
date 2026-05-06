@@ -70,6 +70,7 @@ async def _filter_stale_accounts(
     Returns: (dids_to_analyze, dids_to_skip)
     """
     now = datetime.now(timezone.utc)
+    settings = await GlobalSettings.get(id=1)
 
     # Fetch existing relationships for all DIDs
     relationships = await AccountRelationship.filter(
@@ -99,6 +100,12 @@ async def _filter_stale_accounts(
         threshold = await _get_staleness_threshold(rel)
         time_since_analysis = now - rel.profile.last_analyzed_at
 
+        # Override staleness if ignore_staleness_threshold_days is set and exceeded
+        if settings.ignore_staleness_threshold_days > 0 and \
+           time_since_analysis.days >= settings.ignore_staleness_threshold_days:
+            to_analyze.append(did)
+            continue
+
         if time_since_analysis > threshold:
             # Stale — needs refresh
             to_analyze.append(did)
@@ -109,7 +116,8 @@ async def _filter_stale_accounts(
     logger.info(
         f"Staleness filter: {len(to_analyze)} to analyze, {skipped} skipped "
         f"(threshold: tier2={STALENESS_THRESHOLDS[2].days}d, "
-        f"tier1={STALENESS_THRESHOLDS[1].days}d, tier0={STALENESS_THRESHOLDS[0].days}d)"
+        f"tier1={STALENESS_THRESHOLDS[1].days}d, tier0={STALENESS_THRESHOLDS[0].days}d"
+        f"{f', force_reanalyze_after={settings.ignore_staleness_threshold_days}d' if settings.ignore_staleness_threshold_days > 0 else ''})"
     )
 
     return to_analyze, [d for d in all_dids if d not in to_analyze]

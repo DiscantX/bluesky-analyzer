@@ -29,6 +29,7 @@ class GlobalSettings(Model):
     # Default 15 vs. the old hardcoded 5 → 2-3x faster feed phase.
     # Authenticated PDS rate limit is 3000 req/5min; 15 concurrent is safe.
     feed_fetch_concurrency = fields.IntField(default=15)
+    ignore_staleness_threshold_days = fields.IntField(default=0)
 
     class Meta:
         table = "global_settings"
