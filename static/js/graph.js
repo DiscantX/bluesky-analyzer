@@ -101,9 +101,9 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
     });
 
     // Update UI buttons visibility
-    resetBtn.style.display = (mode === 'macro' || mode === 'community_overview') ? 'none' : 'block';
+    resetBtn.style.display = mode === 'macro' ? 'none' : 'block';
     communityOverviewBtn.style.display = (mode === 'macro' || mode === 'ego') ? 'block' : 'none';
-    backToCommunityBtn.style.display = (mode === 'community_detail' || mode === 'ego') ? 'block' : 'none';
+    backToCommunityBtn.style.display = (mode === 'community' && communityId !== null || mode === 'ego') ? 'block' : 'none';
 
     let modeLabel = '';
     if (mode === 'macro') modeLabel = 'Macro-View';
@@ -194,7 +194,8 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
           // Double Click Logic
           if (node.type === 'community_meta') {
             // Shatter Meta-node into community details
-            loadGraphData('community', null, node.id, { x: node.x, y: node.y });
+            const rawId = node.id.toString().replace('comm-', '');
+            loadGraphData('community', null, rawId, { x: node.x, y: node.y });
           } else if (node.did) {
             // Walk into Ego-Graph
             loadGraphData('ego', node.did, null, { x: node.x, y: node.y });

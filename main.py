@@ -198,6 +198,15 @@ async def lifespan(app: FastAPI):
         add_exception_handlers=True,
     ):
         ensure_sqlite_compat_columns()
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s instead of failing immediately
+        conn.execute("PRAGMA synchronous=NORMAL")  # Safe with WAL, much faster
+        conn.execute("PRAGMA cache_size=-64000")   # 64MB page cache
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.commit()
+        conn.close()
+        
         logger.info(f"Database ready at {DB_PATH}")
 
         # Initialize default settings and apply CLI overrides

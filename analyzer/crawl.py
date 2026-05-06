@@ -534,7 +534,8 @@ async def hydrate_stubs(
     dids: list[str], 
     semaphore: asyncio.Semaphore, 
     on_progress=None,
-    client: httpx.AsyncClient | None = None
+    client: httpx.AsyncClient | None = None,
+    write_queue: asyncio.Queue | None = None
 ) -> int:
     """Hydrate graph-discovered stubs with public profile counts/avatar data."""
     unique_dids = list(dict.fromkeys(dids))
@@ -594,20 +595,24 @@ async def hydrate_stubs(
             hydrated += 1
 
         if profiles_to_update:
-            await Profile.bulk_update(profiles_to_update, fields=[
+            task = Profile.bulk_update(profiles_to_update, fields=[
                 "handle", "display_name", "avatar_url", "profile_url", 
                 "followers_count", "follows_count", "posts_count", 
                 "description", "banner_url", "account_created_at", 
                 "labels", "last_hydrated_at"
             ])
+            if write_queue: await write_queue.put(task)
+            else: await task
+
         if relationships_to_update:
-            await AccountRelationship.bulk_update(relationships_to_update, fields=[
-                "crawl_pending_fields", "crawl_priority"
-            ])
+            task = AccountRelationship.bulk_update(relationships_to_update, fields=["crawl_pending_fields", "crawl_priority"])
+            if write_queue: await write_queue.put(task)
+            else: await task
+
         if queue_items_to_update:
-            await CrawlQueueItem.bulk_update(queue_items_to_update, fields=[
-                "handle", "priority", "hydrated_at"
-            ])
+            task = CrawlQueueItem.bulk_update(queue_items_to_update, fields=["handle", "priority", "hydrated_at"])
+            if write_queue: await write_queue.put(task)
+            else: await task
 
         if on_progress:
             current = min(i + BATCH_SIZE, total)
