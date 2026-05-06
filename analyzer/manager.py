@@ -1,10 +1,14 @@
 import asyncio
 import time
+import contextvars
 from typing import Dict, Set, Any, List
 
 # Shared state for running sync/crawl tasks across API and Background Worker.
 # Keys are operation-aware, for example "main:sync" and "main:crawl".
 running_tasks: Dict[str, asyncio.Task] = {}
+
+current_alias_var = contextvars.ContextVar("current_alias", default=None)
+current_op_var = contextvars.ContextVar("current_op", default=None)
 
 
 class RateTracker:
@@ -54,7 +58,9 @@ class ProgressBus:
 
     async def emit(self, alias: str, event: Any):
         op = event.get("operation")
-        self.last_event[(alias, op)] = event
+        # Do not cache "heartbeat" log messages as the persistent status for refreshes
+        if not event.get("is_heartbeat"):
+            self.last_event[(alias, op)] = event
         if alias not in self.subscribers:
             return
         

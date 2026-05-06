@@ -36,17 +36,61 @@ import analyzer.worker as worker_module
 from analyzer.manager import running_tasks
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
-)
-# Silence noise from libraries. The httpx logs for public getProfiles 
-# batch requests are massive and can become a synchronous bottleneck 
-# when writing to a slow terminal.
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+class LogTruncator(logging.Filter):
+    """Truncates massive log messages to avoid terminal I/O bottlenecks."""
+    def filter(self, record):
+        if isinstance(record.msg, str) and len(record.msg) > 180:
+            record.msg = record.msg[:177] + "..."
+        return True
+
+class BusLogHandler(logging.Handler):
+    """Routes library logs to the web progress bus if an active task context exists."""
+    def emit(self, record):
+        from analyzer.manager import current_alias_var, current_op_var, bus
+        alias = current_alias_var.get()
+        op = current_op_var.get()
+        # We only route HTTP library logs to the web view to provide a "heartbeat"
+        if alias and record.name.startswith(("httpx", "httpcore")):
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(bus.emit(alias, {
+                    "kind": "progress",
+                    "operation": op,
+                    "message": record.getMessage(),
+                    "is_heartbeat": True
+                }))
+            except RuntimeError:
+                pass
+
+class TerminalLibraryFilter(logging.Filter):
+    """Hides verbose library logs from the terminal while letting them flow to the bus."""
+    def filter(self, record):
+        if record.name.startswith(("httpx", "httpcore", "uvicorn.access")) and record.levelno < logging.WARNING:
+            return False
+        return True
+
+root_logger = logging.getLogger()
+# Clear any existing handlers to prevent duplicate logs,
+# especially if basicConfig was called implicitly or by another library.
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+root_logger.setLevel(logging.INFO)
+
+formatter = logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s — %(message)s", datefmt="%H:%M:%S")
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+console_handler.addFilter(LogTruncator())
+console_handler.addFilter(TerminalLibraryFilter())
+root_logger.addHandler(console_handler)
+
+bus_handler = BusLogHandler()
+bus_handler.setFormatter(formatter)
+root_logger.addHandler(bus_handler)
+
+# Re-enable library loggers to ensure they generate records for the BusLogHandler
+logging.getLogger("httpx").setLevel(logging.INFO)
+logging.getLogger("httpcore").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +336,7 @@ def main():
         port=args.port,
         reload=args.reload,
         log_level="info",
+        log_config=None, # Prevent uvicorn from overriding our custom log routing
         access_log=False,
     )
 

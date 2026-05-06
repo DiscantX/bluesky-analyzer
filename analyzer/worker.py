@@ -205,6 +205,10 @@ async def run_auto_discovery_analysis(account: SavedAccount):
     Targets accounts that are Tier 1 but NOT follows/followers.
     """
     try:
+        from analyzer.manager import current_alias_var, current_op_var
+        current_alias_var.set(account.alias)
+        current_op_var.set("discovery")
+
         password = config.get_password(account.alias)
         if not password:
             return

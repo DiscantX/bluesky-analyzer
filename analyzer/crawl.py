@@ -159,6 +159,10 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
         batch_size=batch_size,
         last_message="Preparing crawl queue...",
     )
+    from analyzer.manager import current_alias_var, current_op_var
+    current_alias_var.set(owner.alias)
+    current_op_var.set("crawl")
+
     await reset_interrupted_crawl_work(owner)
 
     session_start = datetime.now(timezone.utc)

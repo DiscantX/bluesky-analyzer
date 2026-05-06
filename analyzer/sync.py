@@ -22,7 +22,7 @@ from analyzer.fetch import fetch_all_follows, fetch_all_followers, fetch_feeds_c
 from analyzer.analyze import build_tracked_user_data
 from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge, Profile, GlobalSettings
 from db.profile_store import upsert_profile_relationship
-from analyzer.manager import bus
+from analyzer.manager import bus, current_alias_var, current_op_var
 from analyzer.metrics import run_graph_analysis
 
 logger = logging.getLogger(__name__)
@@ -187,6 +187,9 @@ async def run_sync(
     Perform a full sync. Progress events are pushed to the broadcast bus
     so the SSE endpoint can stream them to the browser.
     """
+    current_alias_var.set(alias)
+    current_op_var.set("sync")
+
     sync_run = await SyncRun.create(account=saved_account, status="running")
 
     session_start = datetime.now(timezone.utc)
