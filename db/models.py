@@ -51,6 +51,21 @@ class SavedAccount(Model):
     def __str__(self):
         return f"{self.alias} (@{self.handle})"
 
+class CommunityMetadata(Model):
+    """Identity and descriptive data for a detected community."""
+    id = fields.IntField(pk=True)
+    owner = fields.ForeignKeyField("models.SavedAccount", related_name="communities")
+    community_id = fields.IntField()
+    name = fields.CharField(max_length=256, null=True)
+    description = fields.TextField(null=True)
+    top_keywords = fields.JSONField(null=True) # Aggregated keywords
+    representative_members = fields.JSONField(null=True) # Top FlowRank handles
+    last_updated_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "community_metadata"
+        unique_together = (("owner", "community_id"),)
+
 
 class SyncRun(Model):
     """Records each time a sync was performed for an account."""
@@ -118,6 +133,7 @@ class Profile(Model):
     last_analyzed_at = fields.DatetimeField(null=True)
     first_seen_at = fields.DatetimeField(auto_now_add=True)
     labels = fields.TextField(null=True) # Stored as JSON string
+    top_keywords = fields.JSONField(null=True) # Map of word -> frequency
 
     class Meta:
         table = "profiles"

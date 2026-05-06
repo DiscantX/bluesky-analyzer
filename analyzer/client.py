@@ -18,7 +18,10 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from db.models import SavedAccount
 
 from atproto import Client
 from atproto_client.exceptions import RequestException
@@ -233,3 +236,14 @@ class BskyClient:
 
     async def block(self, did: str):
         raise NotImplementedError("Write operations not yet implemented.")
+
+async def get_client(account: SavedAccount) -> BskyClient:
+    """Helper to initialize and login a client for a specific account."""
+    import config
+    password = config.get_password(account.alias)
+    if not password:
+        raise RuntimeError(f"No password found for alias {account.alias}")
+
+    client = BskyClient(account.alias)
+    await client.login(account.handle, password)
+    return client

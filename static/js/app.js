@@ -250,6 +250,8 @@ function badges(u) {
 }
 
 function userRow(u) {
+  const groupLabel = u.comm_name || (u.community_id != null ? u.community_id : "—");
+  const groupTitle = u.comm_name ? `Group: ${u.comm_name} (#${u.community_id})` : "Community ID";
   return `
     <a class="user-row" href="${u.profile_url}" target="_blank" rel="noopener">
       <div class="user-grid">
@@ -257,7 +259,7 @@ function userRow(u) {
         <div class="user-name" title="${u.display_name}" style="min-width:0">${u.display_name || "—"}</div>
         <div class="user-handle" title="${u.handle}" style="min-width:0">@${u.handle}</div>
         <div class="col-stat" title="FlowRank Influence">💎 ${u.flowrank_score > 0 ? (u.flowrank_score * 1000).toFixed(4) : "—"}</div>
-        <div class="col-stat" title="Community ID">🌐 ${u.community_id != null ? u.community_id : "—"}</div>
+        <div class="col-stat" title="${groupTitle}">🌐 ${groupLabel}</div>
         <div class="col-stat">${fmt(u.followers_count)}</div>
         <div class="col-stat">${fmt(u.follows_count)}</div>
         <div class="col-stat">${u.days_since_post != null ? u.days_since_post + "d" : "—"}</div>

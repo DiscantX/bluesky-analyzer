@@ -121,10 +121,12 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
       .nodeId('id')
       .nodeLabel(node => {
           if (node.type === 'community_meta') {
-              return `Community ${node.id} (${node.member_count} members, Avg Rank: ${(node.avg_rank * 1000).toFixed(4)})`;
+              const name = node.name || `Community ${node.id.toString().replace('comm-', '')}`;
+              return `${name} (${node.member_count} members, Avg Rank: ${(node.avg_rank * 1000).toFixed(4)})`;
           }
           const truncated = data.metadata.truncated_counts?.[node.did]; // Tooltip for ghost nodes
-          return `@${node.handle}${truncated ? ` (+${truncated} neighbors)` : ''} (Rank: ${(node.rank * 1000).toFixed(4)})`;
+          const commPart = node.comm_name ? ` [${node.comm_name}]` : '';
+          return `@${node.handle}${commPart}${truncated ? ` (+${truncated} neighbors)` : ''} (Rank: ${(node.rank * 1000).toFixed(4)})`;
       })
       .nodeColor(node => {
           if (node.type === 'community_meta') {
@@ -161,7 +163,7 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
           // Labels fade in based on zoom level and node importance
           const labelThreshold = isMeta ? 0.2 : 2.5;
           if (globalScale > labelThreshold) {
-              const label = isMeta ? `Community ${node.id}` : `@${node.handle}`;
+              const label = isMeta ? (node.name || `Community ${node.id.toString().replace('comm-', '')}`) : `@${node.handle}`;
               const fontSize = (isMeta ? 14 : 10) / globalScale;
               ctx.font = `${fontSize}px Sans-Serif`;
               ctx.textAlign = 'center';
@@ -254,7 +256,55 @@ async function showNodeDetails(node) {
     panel.classList.add('open');
     
     if (node.type === 'community_meta') {
-        content.innerHTML = `<div class="state-box">Meta-Node: Community ${node.id}<br>Double-click to expand ${node.member_count} profiles.</div>`;
+        const rawId = node.id.toString().replace('comm-', '');
+        
+        let keywordHtml = '—';
+        if (node.top_keywords) {
+            try {
+                const kws = typeof node.top_keywords === 'string' ? JSON.parse(node.top_keywords) : node.top_keywords;
+                keywordHtml = Object.entries(kws)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([word]) => `<span class="badge" style="margin: 2px; background: var(--surface2); border: 1px solid var(--border); font-size: 0.7rem;">${word}</span>`)
+                    .join('');
+            } catch (e) { console.error("Error parsing keywords", e); }
+        }
+
+        let membersHtml = '—';
+        if (node.representative_members) {
+            try {
+                const members = typeof node.representative_members === 'string' ? JSON.parse(node.representative_members) : node.representative_members;
+                membersHtml = members.map(m => `<div style="font-size: 0.75rem; color: var(--accent); margin-bottom: 2px;">${m}</div>`).join('');
+            } catch (e) { console.error("Error parsing members", e); }
+        }
+
+        content.innerHTML = `
+            <div style="padding: 1rem;">
+                <div style="margin-bottom: 1.5rem;">
+                    <div style="font-size: 1.2rem; font-weight: 800; color: var(--accent2); margin-bottom: 0.25rem;">${node.name || `Community ${rawId}`}</div>
+                    <div style="font-style: italic; font-size: 0.85rem; color: var(--muted); line-height: 1.4;">${node.description || 'No description available for this cluster.'}</div>
+                </div>
+
+                <div class="sidebar-label">Cluster Metrics</div>
+                <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.7rem; margin-bottom:1.5rem;">
+                    <div style="display:flex; justify-content:space-between;"><span>Total Members</span><span style="color:var(--accent); font-weight: bold;">${fmt(node.member_count)}</span></div>
+                    <div style="display:flex; justify-content:space-between;"><span>Avg Influence</span><span style="color:var(--accent); font-weight: bold;">${(node.avg_rank * 1000).toFixed(4)}</span></div>
+                </div>
+
+                <div class="sidebar-label">Top Keywords</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 1.5rem;">
+                    ${keywordHtml}
+                </div>
+
+                <div class="sidebar-label">Representative Figures</div>
+                <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; margin-bottom:1.5rem;">
+                    ${membersHtml}
+                </div>
+
+                <div class="state-box" style="font-size: 0.7rem; border-style: dashed; opacity: 0.8;">
+                    Double-click the sphere in the network to shatter this meta-node into individual profiles.
+                </div>
+            </div>
+        `;
         return;
     }
 
@@ -284,7 +334,7 @@ async function showNodeDetails(node) {
                 <div class="sidebar-label">Network Position</div>
                 <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.7rem; margin-bottom:1rem;">
                     <div style="display:flex; justify-content:space-between;"><span>FlowRank</span><span style="color:var(--accent);">${(u.flowrank_score * 1000).toFixed(4)}</span></div>
-                    <div style="display:flex; justify-content:space-between;"><span>Community</span><span style="color:var(--accent2);">#${u.community_id ?? '—'}</span></div>
+                    <div style="display:flex; justify-content:space-between;"><span>Community</span><span style="color:var(--accent2);" title="${u.comm_name || ''}">${u.comm_name || '#' + (u.community_id ?? '—')}</span></div>
                     <div style="display:flex; justify-content:space-between;"><span>In-Degree</span><span>${u.in_subgraph_degree}</span></div>
                 </div>
 

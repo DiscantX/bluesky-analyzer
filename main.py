@@ -84,6 +84,7 @@ def ensure_sqlite_compat_columns() -> None:
             "banner_url": "TEXT",
             "account_created_at": "TIMESTAMP NULL",
             "labels": "TEXT",
+            "top_keywords": "TEXT",
         }
         for name, sql_type in additions_p.items():
             if columns_p and name not in columns_p:

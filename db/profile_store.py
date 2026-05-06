@@ -28,6 +28,7 @@ PROFILE_FIELDS = {
     "is_repost_heavy",
     "last_analyzed_at",
     "labels",
+    "top_keywords",
 }
 
 RELATIONSHIP_FIELDS = {

@@ -125,6 +125,7 @@ SELECT_FIELDS = """
     r.crawl_priority,
     r.clustering_coefficient,
     r.discovered_via,
+    cm.name as comm_name,
     r.last_crawled_at,
     p.last_analyzed_at,
     p.last_hydrated_at
@@ -568,6 +569,7 @@ async def query_users(
         SELECT {SELECT_FIELDS}
         FROM account_relationships r
         JOIN profiles p ON p.id = r.profile_id
+        LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id
         WHERE {where_sql}
         ORDER BY {order_col} {direction}
         LIMIT ? OFFSET ?
@@ -579,6 +581,7 @@ async def query_users(
         SELECT COUNT(*) AS total
         FROM account_relationships r
         JOIN profiles p ON p.id = r.profile_id
+        LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id
         WHERE {where_sql}
         """,
         params,
@@ -648,14 +651,15 @@ async def get_graph_data(
                 JOIN profiles p ON p.id = r.profile_id
                 WHERE r.owner_id = ? AND r.community_id IS NOT NULL
             )
-            SELECT did, handle, rank, comm, tier
-            FROM RankedNodes
+            SELECT rn.did, rn.handle, rn.rank, rn.comm, rn.tier, cm.name as comm_name
+            FROM RankedNodes rn
+            LEFT JOIN community_metadata cm ON cm.community_id = rn.comm AND cm.owner_id = ?
             WHERE rank_in_comm <= 50
                OR (cc < 0.1 AND rank > 0.001) -- Bridge nodes
             ORDER BY rank DESC
             LIMIT ?
         """
-        params = [owner_id, limit]
+        params = [owner_id, owner_id, limit]
     elif mode == "ego" and seed_did:
         # Neighborhood prioritized by FlowRank (Depth 1 and 2)
         nodes_query = """
@@ -664,9 +668,10 @@ async def get_graph_data(
                 UNION
                 SELECT follower_did as did FROM follow_edges WHERE followee_did = ?
             )
-            SELECT DISTINCT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier
+            SELECT DISTINCT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier, cm.name as comm_name
             FROM account_relationships r
             JOIN profiles p ON p.id = r.profile_id
+            LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id
             WHERE r.owner_id = ? 
               AND (
                 r.did = ? 
@@ -684,12 +689,17 @@ async def get_graph_data(
             nodes_query = """
                 SELECT
                     r.community_id as id,
+                    cm.name as name,
+                    cm.description as description,
+                    cm.top_keywords as top_keywords,
+                    cm.representative_members as representative_members,
                     COUNT(r.did) as member_count,
                     AVG(r.flowrank_score) as avg_rank,
                     MIN(p.handle) as representative_handle,
                     'community_meta' as type -- Custom type for frontend
                 FROM account_relationships r
                 JOIN profiles p ON p.id = r.profile_id
+                LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id
                 WHERE r.owner_id = ? AND r.community_id IS NOT NULL
                 GROUP BY r.community_id
                 ORDER BY member_count DESC
@@ -704,9 +714,11 @@ async def get_graph_data(
                     p.handle,
                     r.flowrank_score as rank,
                     r.community_id as comm,
-                    r.crawl_tier as tier
+                    r.crawl_tier as tier,
+                    cm.name as comm_name
                 FROM account_relationships r
                 JOIN profiles p ON p.id = r.profile_id
+                LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id
                 WHERE r.owner_id = ? AND r.community_id = ?
                 ORDER BY r.flowrank_score DESC
                 LIMIT ?
@@ -715,9 +727,10 @@ async def get_graph_data(
     else:
         # Default fallback
         nodes_query = """
-            SELECT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier
+            SELECT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier, cm.name as comm_name
             FROM account_relationships r
             JOIN profiles p ON p.id = r.profile_id
+            LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id
             WHERE r.owner_id = ?
             ORDER BY r.flowrank_score DESC
             LIMIT ?

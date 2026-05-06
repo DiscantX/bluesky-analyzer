@@ -6,7 +6,9 @@ Pure functions — no I/O, no DB access. Easy to unit test.
 
 from __future__ import annotations
 
+import re
 import json
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -14,6 +16,38 @@ from typing import Any, Optional
 # ── Configuration defaults (overridden by settings in main.py) ─────────────────
 INACTIVE_DAYS_DEFAULT = 90
 REPOST_RATIO_THRESHOLD_DEFAULT = 0.70
+
+STOP_WORDS = {
+    "the", "and", "a", "of", "in", "to", "is", "it", "with", "for", "on", "at", "by", 
+    "from", "up", "about", "into", "over", "after", "your", "my", "we", "he", "she", 
+    "they", "me", "him", "her", "us", "them", "be", "was", "were", "been", "being", 
+    "have", "has", "had", "do", "does", "did", "can", "will", "should", "would", 
+    "could", "there", "when", "where", "why", "how", "all", "any", "both", "each", 
+    "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", 
+    "own", "same", "so", "than", "too", "very", "just", "like", "now", "get",
+    # Additional common noise
+    "this", "that", "you", "your", "they", "them", "their", "what", "which", "who", "whose",
+    "here", "there", "where", "when", "how", "why", "also", "even", "much", "well",
+    "into", "unto", "onto", "bsky", "social", "app", "bluesky", "bridge", "post", 
+    "posts", "feed", "feeds", "account", "accounts", "profile", "profiles", 
+    "user", "users", "about", "from", "been", "would", "will", "more",
+    "com", "org", "net", "edu", "gov", "mil", "http", "https", "www", "link",
+    "bio", "linktr", "follows", "follower", "followers", "following"
+}
+
+def extract_keywords(text: str | None) -> Counter:
+    """Simple tokenizer that filters stop words and short tokens."""
+    if not text:
+        return Counter()
+    
+    # Aggressive URL and domain stripping
+    text = text.lower()
+    text = re.sub(r'https?://\S+|@\S+', '', text)
+    text = re.sub(r'\b[a-z0-9.-]+\.[a-z]{2,6}\b(/\S*)?', '', text)
+    # Tokenize words
+    words = re.findall(r'\b[a-z]{3,}\b', text)
+    
+    return Counter([w for w in words if w not in STOP_WORDS])
 
 
 def parse_dt(value: Any) -> Optional[datetime]:
@@ -48,6 +82,7 @@ def analyze_feed(
     repost_count = 0
     original_count = 0
     interacted = False
+    keyword_counts = Counter()
 
     for item in feed_items:
         post = getattr(item, "post", None)
@@ -69,6 +104,11 @@ def analyze_feed(
             repost_count += 1
         else:
             original_count += 1
+            # ── Extract Keywords from Original Posts ─────────────────────────
+            record = getattr(post, "record", None)
+            text = getattr(record, "text", "")
+            keyword_counts.update(extract_keywords(text))
+            
             # ── Check if this post interacted with the owner ─────────────────
             record = getattr(post, "record", None)
             if record and not interacted:
@@ -97,6 +137,7 @@ def analyze_feed(
         "sampled_post_count": total,
         "repost_ratio": round(repost_ratio, 4),
         "interacted_with_owner": interacted,
+        "keywords": dict(keyword_counts.most_common(20))
     }
 
 
@@ -158,6 +199,14 @@ def build_tracked_user_data(
         return 0
 
     feed_stats = analyze_feed(feed_items, owner_did)
+    
+    # Combine post keywords with weighted bio keywords
+    bio_text = getattr(profile, "description", "")
+    combined_keywords = Counter(feed_stats.get("keywords", {}))
+    bio_keywords = extract_keywords(bio_text)
+    for word, count in bio_keywords.items():
+        combined_keywords[word] += (count * 5) # Bio is 5x more indicative of identity
+
     flags = compute_flags(
         feed_stats, i_follow_them, they_follow_me, inactive_days, repost_threshold
     )
@@ -188,6 +237,7 @@ def build_tracked_user_data(
         "sampled_post_count": feed_stats["sampled_post_count"],
         "repost_ratio": feed_stats["repost_ratio"],
         "interacted_with_owner": feed_stats["interacted_with_owner"],
+        "top_keywords": dict(combined_keywords.most_common(20)),
         # Flags
         **flags,
     }
