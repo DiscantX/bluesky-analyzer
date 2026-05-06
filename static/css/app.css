@@ -812,3 +812,192 @@ body {
   margin-bottom: 0.5rem;
   border: 1px solid rgba(91,140,248,0.15) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SETTINGS MODAL — tabbed, full-width
+───────────────────────────────────────────────────────────────────────────── */
+
+.settings-modal-wide {
+  max-width: 760px;
+  width: 95vw;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.4rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.settings-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.settings-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+  transition: color 0.15s;
+}
+.settings-close:hover { color: var(--text); }
+
+/* ── Tab bar ── */
+.settings-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.stab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.65rem 1rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+.stab:hover { color: var(--text); }
+.stab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: var(--surface);
+}
+
+/* ── Scrollable body ── */
+.settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0;
+}
+
+/* ── Tab panels ── */
+.stab-panel { display: none; padding: 0.75rem 1.4rem 1rem; }
+.stab-panel.active { display: block; }
+
+/* ── Setting groups ── */
+.setting-group {
+  margin-bottom: 1.5rem;
+}
+
+.setting-group-label {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-group-desc {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin: 0.4rem 0 0.75rem;
+  line-height: 1.5;
+}
+
+/* ── Individual setting rows ── */
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.setting-row:last-child { border-bottom: none; }
+
+.setting-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.setting-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.15rem;
+}
+
+.setting-desc {
+  font-size: 0.68rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.setting-input {
+  width: 80px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.5rem;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  text-align: right;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.setting-input:focus { border-color: var(--accent); }
+
+/* Wide input for fields that need more digits (MB budget, node counts) */
+.setting-input.wide { width: 110px; }
+
+.setting-unit {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted2);
+  white-space: nowrap;
+  min-width: 36px;
+}
+
+/* ── Footer ── */
+.settings-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 1.4rem;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.settings-footer-hint {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--inactive);
+}
+
+/* ── Dirty-state highlight on changed inputs ── */
+.setting-input.dirty {
+  border-color: rgba(167,139,250,0.5);
+  background: rgba(167,139,250,0.05);
+}

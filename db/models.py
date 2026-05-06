@@ -12,28 +12,58 @@ from tortoise import fields
 from tortoise.models import Model
 
 
-class GlobalSettings(Model):
-    """App-wide configuration settings."""
-    id = fields.IntField(pk=True)
-    inactivity_threshold_days = fields.IntField(default=90)
-    repost_ratio_threshold = fields.FloatField(default=0.70)
-    feed_sample_size = fields.IntField(default=100)
-    sync_staleness_hours = fields.IntField(default=12)
-    worker_sweep_interval_seconds = fields.IntField(default=300)
-    crawl_concurrency = fields.IntField(default=3)
-    min_connection_threshold = fields.IntField(default=3)
-    crawl_budget_mb = fields.IntField(default=1024)
-    disable_internal_rate_limits = fields.BooleanField(default=False)
+"""
+db/models.py  — excerpt showing the updated GlobalSettings model.
+Replace the existing GlobalSettings class with this one.
+All other models remain unchanged.
+"""
 
-    # FIX 5: Configurable concurrency for feed fetching.
-    # Default 15 vs. the old hardcoded 5 → 2-3x faster feed phase.
-    # Authenticated PDS rate limit is 3000 req/5min; 15 concurrent is safe.
-    feed_fetch_concurrency = fields.IntField(default=15)
-    ignore_staleness_threshold_days = fields.IntField(default=0)
+# ── paste this class in place of the existing GlobalSettings ──────────────────
+
+class GlobalSettings(Model):
+    """App-wide configuration — one row (id=1) forever."""
+
+    id = fields.IntField(pk=True)
+
+    # ── Analysis ──────────────────────────────────────────────────────────────
+    inactivity_threshold_days   = fields.IntField(default=90)
+    repost_ratio_threshold      = fields.FloatField(default=0.70)
+    feed_sample_size            = fields.IntField(default=100)
+
+    # ── Sync ──────────────────────────────────────────────────────────────────
+    sync_staleness_hours                = fields.IntField(default=12)
+    worker_sweep_interval_seconds       = fields.IntField(default=300)
+    staleness_tier2_days                = fields.IntField(default=3)
+    staleness_tier1_days                = fields.IntField(default=7)
+    staleness_tier0_days                = fields.IntField(default=30)
+    ignore_staleness_threshold_days     = fields.IntField(default=0)
+
+    # ── API / Rate limits ─────────────────────────────────────────────────────
+    feed_fetch_concurrency          = fields.IntField(default=15)
+    disable_internal_rate_limits    = fields.BooleanField(default=False)
+    api_max_retries                 = fields.IntField(default=4)
+    api_base_backoff_seconds        = fields.FloatField(default=2.0)
+    api_polite_delay_ms             = fields.IntField(default=10)
+
+    # ── Crawl ─────────────────────────────────────────────────────────────────
+    crawl_concurrency               = fields.IntField(default=3)
+    min_connection_threshold        = fields.IntField(default=3)
+    crawl_budget_mb                 = fields.IntField(default=1024)
+    crawl_hydration_concurrency     = fields.IntField(default=5)
+
+    # ── Profile analysis loop ─────────────────────────────────────────────────
+    profile_analysis_batch_size             = fields.IntField(default=30)
+    profile_analysis_staleness_days         = fields.IntField(default=7)
+    profile_analysis_inter_batch_sleep_seconds = fields.FloatField(default=2.0)
+    profile_analysis_idle_sleep_seconds     = fields.FloatField(default=60.0)
+
+    # ── Graph metrics ─────────────────────────────────────────────────────────
+    clustering_top_n    = fields.IntField(default=1000)
+    louvain_max_nodes   = fields.IntField(default=10000)
 
     class Meta:
         table = "global_settings"
-
+        
 class SavedAccount(Model):
     """A Bluesky account the user has configured in this app."""
 

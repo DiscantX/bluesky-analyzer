@@ -238,67 +238,378 @@
   </div>
 </div>
 
+
 <!-- ── Settings Modal ──────────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)closeSettings()">
-  <div class="modal" style="max-width: 500px;">
-    <div class="modal-title">Global Settings</div>
-    
-    <div class="settings-grid">
-      <div class="sidebar-label">Analysis</div>
-      <div class="field">
-        <label>Inactivity Threshold (days)</label>
-        <input id="set-inactivity" type="number" min="1" max="365">
-      </div>
-      <div class="field">
-        <label>Repost Ratio Threshold (0.0-1.0)</label>
-        <input id="set-repost" type="number" step="0.05" min="0" max="1">
-      </div>
-      <div class="field">
-        <label>Feed Sample Size (posts)</label>
-        <input id="set-sample" type="number" min="10" max="100">
-      </div>
-
-      <div class="sidebar-label">Sync & Background</div>
-      <div class="field">
-        <label>Sync Staleness (hours)</label>
-        <input id="set-staleness" type="number" min="1" max="168">
-      </div>
-      <div class="field">
-        <label>Worker Sweep Interval (seconds)</label>
-        <input id="set-sweep" type="number" min="30" max="3600">
-      </div>
-
-      <div class="sidebar-label">Network Discovery</div>
-      <div class="field">
-        <label>Min Connection Threshold</label>
-        <input id="set-min-conn" type="number" min="1" max="20">
-      </div>
-      <div class="field">
-        <label>Crawl Concurrency</label>
-        <input id="set-crawl-conc" type="number" min="1" max="10">
-      </div>
-      <div class="field">
-        <label>Crawl Budget (MB)</label>
-        <input id="set-budget" type="number" min="100" max="10240">
-      </div>
+  <div class="modal settings-modal-wide">
+ 
+    <div class="settings-header">
+      <div class="settings-title">⚙ Settings</div>
+      <button class="settings-close" onclick="closeSettings()">×</button>
     </div>
-    <div class="form-group">
-      <label class="checkbox-label">
-        <input type="checkbox" id="set-disable-rate-limits">
-        Disable Internal Rate Limits (Respect backoffs)
-      </label>
-      <p class="help-text">
-        Bypasses the 5 concurrent request limit and 100ms artificial delays. 
-        The system will still respect 429 "Too Many Requests" backoff headers from Bluesky.
-      </p>
+ 
+    <!-- Tab bar -->
+    <div class="settings-tabs" id="settings-tabs">
+      <button class="stab active" data-tab="analysis"  onclick="switchSettingsTab('analysis')">📊 Analysis</button>
+      <button class="stab"        data-tab="sync"      onclick="switchSettingsTab('sync')">↺ Sync</button>
+      <button class="stab"        data-tab="api"       onclick="switchSettingsTab('api')">🌐 API</button>
+      <button class="stab"        data-tab="crawl"     onclick="switchSettingsTab('crawl')">✨ Crawl</button>
+      <button class="stab"        data-tab="profile"   onclick="switchSettingsTab('profile')">👤 Profile Loop</button>
+      <button class="stab"        data-tab="graph"     onclick="switchSettingsTab('graph')">🕸 Graph</button>
     </div>
-
-    <div class="modal-actions">
+ 
+    <!-- Tab panels -->
+    <div class="settings-body" id="settings-body">
+ 
+      <!-- ── Analysis ── -->
+      <div class="stab-panel active" data-panel="analysis">
+        <div class="setting-group">
+          <div class="setting-group-label">Content Thresholds</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Inactivity Threshold</div>
+              <div class="setting-desc">Days since last post before an account is flagged as inactive.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-inactivity_threshold_days" min="1" max="365">
+              <span class="setting-unit">days</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Repost Ratio Threshold</div>
+              <div class="setting-desc">Fraction of sampled posts that must be reposts to flag an account as repost-heavy.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-repost_ratio_threshold" min="0" max="1" step="0.05">
+              <span class="setting-unit">0–1</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Feed Sample Size</div>
+              <div class="setting-desc">Number of recent posts fetched per account for activity analysis. Higher = more accurate, slower sync.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-feed_sample_size" min="10" max="200">
+              <span class="setting-unit">posts</span>
+            </div>
+          </div>
+        </div>
+      </div>
+ 
+      <!-- ── Sync ── -->
+      <div class="stab-panel" data-panel="sync">
+        <div class="setting-group">
+          <div class="setting-group-label">Sync Scheduling</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Sync Staleness</div>
+              <div class="setting-desc">How old a sync must be before the background worker triggers a new one.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-sync_staleness_hours" min="1" max="720">
+              <span class="setting-unit">hours</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Worker Sweep Interval</div>
+              <div class="setting-desc">How often the background worker checks whether sync/crawl jobs need scheduling.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-worker_sweep_interval_seconds" min="30" max="86400">
+              <span class="setting-unit">sec</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Force Re-analyze After</div>
+              <div class="setting-desc">Override tier staleness and force re-analysis of any account older than this. 0 = disabled.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-ignore_staleness_threshold_days" min="0" max="365">
+              <span class="setting-unit">days</span>
+            </div>
+          </div>
+        </div>
+ 
+        <div class="setting-group">
+          <div class="setting-group-label">Per-Tier Staleness Thresholds</div>
+          <div class="setting-group-desc">Each crawl tier refreshes on its own schedule. Tier 2 (your direct connections) refresh most frequently.</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Tier 2 — Full (direct follows/followers)</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-staleness_tier2_days" min="1" max="90">
+              <span class="setting-unit">days</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Tier 1 — Standard (graph discoveries)</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-staleness_tier1_days" min="1" max="180">
+              <span class="setting-unit">days</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Tier 0 — Stub (not yet expanded)</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-staleness_tier0_days" min="1" max="365">
+              <span class="setting-unit">days</span>
+            </div>
+          </div>
+        </div>
+      </div>
+ 
+      <!-- ── API ── -->
+      <div class="stab-panel" data-panel="api">
+        <div class="setting-group">
+          <div class="setting-group-label">Concurrency</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Feed Fetch Concurrency</div>
+              <div class="setting-desc">Simultaneous getAuthorFeed requests during sync. Higher = faster sync; Bluesky allows ~25 safely before 429s appear.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-feed_fetch_concurrency" min="1" max="50">
+              <span class="setting-unit">threads</span>
+            </div>
+          </div>
+        </div>
+ 
+        <div class="setting-group">
+          <div class="setting-group-label">Retry &amp; Backoff</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Max Retries on 429</div>
+              <div class="setting-desc">How many times to retry a rate-limited request before giving up.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-api_max_retries" min="0" max="10">
+              <span class="setting-unit">×</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Base Backoff</div>
+              <div class="setting-desc">Initial wait time on a 429 response. Doubles each retry.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-api_base_backoff_seconds" min="0.5" max="60" step="0.5">
+              <span class="setting-unit">sec</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Polite Delay Between Pages</div>
+              <div class="setting-desc">Sleep between paginated API requests. 0 is legal but impolite; 10ms is the default.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-api_polite_delay_ms" min="0" max="5000">
+              <span class="setting-unit">ms</span>
+            </div>
+          </div>
+        </div>
+ 
+        <div class="setting-group">
+          <div class="setting-group-label">Rate Limit Bypass</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Disable Internal Rate Limits</div>
+              <div class="setting-desc">
+                Removes the concurrency semaphore and polite delays. The app will still respect
+                429 backoff headers from Bluesky. Use with caution on shared IPs.
+              </div>
+            </div>
+            <div class="setting-control">
+              <label class="toggle-wrap">
+                <input type="checkbox" id="set-disable_internal_rate_limits">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+ 
+      <!-- ── Crawl ── -->
+      <div class="stab-panel" data-panel="crawl">
+        <div class="setting-group">
+          <div class="setting-group-label">Graph Expansion</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Crawl Concurrency</div>
+              <div class="setting-desc">Simultaneous accounts being expanded by the crawler in one batch step.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-crawl_concurrency" min="1" max="20">
+              <span class="setting-unit">threads</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Hydration Concurrency</div>
+              <div class="setting-desc">Simultaneous public-API profile hydration requests during crawl.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-crawl_hydration_concurrency" min="1" max="20">
+              <span class="setting-unit">threads</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Min Connection Threshold</div>
+              <div class="setting-desc">Minimum edges to already-tracked accounts before a stub is expanded. Prevents graph explosion into irrelevant parts of the network.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-min_connection_threshold" min="1" max="50">
+              <span class="setting-unit">edges</span>
+            </div>
+          </div>
+        </div>
+ 
+        <div class="setting-group">
+          <div class="setting-group-label">Storage Budget</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Crawl Budget</div>
+              <div class="setting-desc">Maximum database size before the crawler pauses and warns you. Depth-1 typically uses ~150 MB; depth-2 selective can reach 2 GB.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-crawl_budget_mb" min="100" max="102400">
+              <span class="setting-unit">MB</span>
+            </div>
+          </div>
+        </div>
+      </div>
+ 
+      <!-- ── Profile Loop ── -->
+      <div class="stab-panel" data-panel="profile">
+        <div class="setting-group">
+          <div class="setting-group-label">Continuous Profile Analysis Loop</div>
+          <div class="setting-group-desc">
+            A persistent background task that continuously fetches feeds and computes
+            activity metrics for all tracked profiles in priority order, independently
+            of sync and crawl.
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Batch Size</div>
+              <div class="setting-desc">Profiles analyzed per batch. Limited in practice by Feed Fetch Concurrency (API tab).</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-profile_analysis_batch_size" min="1" max="500">
+              <span class="setting-unit">profiles</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Profile Staleness</div>
+              <div class="setting-desc">How old a profile's analysis must be before the loop re-queues it.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-profile_analysis_staleness_days" min="1" max="365">
+              <span class="setting-unit">days</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Sleep Between Batches</div>
+              <div class="setting-desc">Cooperative yield between batches so crawl/sync tasks aren't starved. Lower = faster throughput; higher = more CPU headroom for other operations.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-profile_analysis_inter_batch_sleep_seconds" min="0" max="60" step="0.5">
+              <span class="setting-unit">sec</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Idle Sleep</div>
+              <div class="setting-desc">How long the loop sleeps when there are no profiles to analyze.</div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-profile_analysis_idle_sleep_seconds" min="5" max="3600">
+              <span class="setting-unit">sec</span>
+            </div>
+          </div>
+        </div>
+      </div>
+ 
+      <!-- ── Graph ── -->
+      <div class="stab-panel" data-panel="graph">
+        <div class="setting-group">
+          <div class="setting-group-label">NetworkX Metric Computation</div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Clustering Top-N</div>
+              <div class="setting-desc">
+                Clustering coefficient is expensive to compute for all nodes.
+                Only the top-N accounts by FlowRank receive it. Raise for more coverage,
+                lower if graph analysis is slow.
+              </div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-clustering_top_n" min="100" max="100000" step="100">
+              <span class="setting-unit">nodes</span>
+            </div>
+          </div>
+ 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-name">Louvain Max Nodes</div>
+              <div class="setting-desc">
+                Above this count, Louvain community detection falls back to faster
+                Label Propagation (linear time). Raise if your graph is large and
+                you have RAM to spare.
+              </div>
+            </div>
+            <div class="setting-control">
+              <input class="setting-input" type="number" id="set-louvain_max_nodes" min="1000" max="1000000" step="1000">
+              <span class="setting-unit">nodes</span>
+            </div>
+          </div>
+        </div>
+      </div>
+ 
+    </div><!-- /.settings-body -->
+ 
+    <div class="settings-footer">
+      <span class="settings-footer-hint" id="settings-dirty-hint"></span>
       <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
-      <button class="btn btn-primary" onclick="submitSettings()">Save Settings</button>
+      <button class="btn btn-primary" id="settings-save-btn" onclick="submitSettings()">Save Settings</button>
     </div>
+ 
   </div>
 </div>
+
 
 <!-- ── Toast container ────────────────────────────────────────────────────── -->
 <div class="toast-wrap" id="toast-wrap"></div>

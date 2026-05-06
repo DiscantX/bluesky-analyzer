@@ -30,7 +30,7 @@ from api.accounts import router as accounts_router
 from api.sync import router as sync_router
 from api.users import router as users_router
 from api.filters import router as filters_router
-from api.settings import router as settings_router
+from api.api_settings import router as settings_router
 from api.graph import router as graph_router
 import analyzer.worker as worker_module
 from analyzer.manager import running_tasks
@@ -141,17 +141,62 @@ def ensure_sqlite_compat_columns() -> None:
             if columns_p and name not in columns_p:
                 conn.execute(f"ALTER TABLE profiles ADD COLUMN {name} {sql_type}")
 
-        # Update global_settings
+        # Update global_settings with all required infrastructure columns
+        NEW_GLOBAL_SETTINGS_COLUMNS = {
+            "inactivity_threshold_days":        "INTEGER NOT NULL DEFAULT 90",
+            "repost_ratio_threshold":           "REAL NOT NULL DEFAULT 0.70",
+            "feed_sample_size":                 "INTEGER NOT NULL DEFAULT 100",
+            "sync_staleness_hours":             "INTEGER NOT NULL DEFAULT 12",
+            "worker_sweep_interval_seconds":    "INTEGER NOT NULL DEFAULT 300",
+            "disable_internal_rate_limits":     "INTEGER NOT NULL DEFAULT 0",
+            "ignore_staleness_threshold_days":  "INTEGER NOT NULL DEFAULT 0",
+            "feed_fetch_concurrency":           "INTEGER NOT NULL DEFAULT 15",
+            # Sync staleness tiers
+            "staleness_tier2_days":             "INTEGER NOT NULL DEFAULT 3",
+            "staleness_tier1_days":             "INTEGER NOT NULL DEFAULT 7",
+            "staleness_tier0_days":             "INTEGER NOT NULL DEFAULT 30",
+            # API tuning
+            "api_max_retries":                  "INTEGER NOT NULL DEFAULT 4",
+            "api_base_backoff_seconds":         "REAL NOT NULL DEFAULT 2.0",
+            "api_polite_delay_ms":              "INTEGER NOT NULL DEFAULT 10",
+            "crawl_concurrency":                "INTEGER NOT NULL DEFAULT 3",
+            "min_connection_threshold":         "INTEGER NOT NULL DEFAULT 3",
+            "crawl_budget_mb":                  "INTEGER NOT NULL DEFAULT 1024",
+            # Crawl extras
+            "crawl_hydration_concurrency":      "INTEGER NOT NULL DEFAULT 5",
+            # Profile analysis loop
+            "profile_analysis_batch_size":                  "INTEGER NOT NULL DEFAULT 30",
+            "profile_analysis_staleness_days":              "INTEGER NOT NULL DEFAULT 7",
+            "profile_analysis_inter_batch_sleep_seconds":   "REAL NOT NULL DEFAULT 2.0",
+            "profile_analysis_idle_sleep_seconds":          "REAL NOT NULL DEFAULT 60.0",
+            # Graph metrics
+            "clustering_top_n":     "INTEGER NOT NULL DEFAULT 1000",
+            "louvain_max_nodes":    "INTEGER NOT NULL DEFAULT 10000",
+        }
+
         columns_gs = {row[1] for row in conn.execute("PRAGMA table_info(global_settings)").fetchall()}
         if columns_gs:
-            if "disable_internal_rate_limits" not in columns_gs:
-                conn.execute("ALTER TABLE global_settings ADD COLUMN disable_internal_rate_limits INT NOT NULL DEFAULT 0")
-            # FIX 5: Add feed_fetch_concurrency to existing databases.
-            if "ignore_staleness_threshold_days" not in columns_gs:
-                conn.execute("ALTER TABLE global_settings ADD COLUMN ignore_staleness_threshold_days INTEGER NOT NULL DEFAULT 0")
-            # Default 15 (3x the old hardcoded 5).
-            if "feed_fetch_concurrency" not in columns_gs:
-                conn.execute("ALTER TABLE global_settings ADD COLUMN feed_fetch_concurrency INTEGER NOT NULL DEFAULT 15")
+            for name, sql_type in NEW_GLOBAL_SETTINGS_COLUMNS.items():
+                if name not in columns_gs:
+                    conn.execute(f"ALTER TABLE global_settings ADD COLUMN {name} {sql_type}")
+
+        # Ensure the settings row exists and numeric fields have valid (non-zero) defaults
+        # to satisfy Pydantic validation (many fields have ge=1 or ge=30 constraints).
+        exists = conn.execute("SELECT 1 FROM global_settings WHERE id = 1").fetchone()
+        if not exists:
+            conn.execute("INSERT INTO global_settings (id) VALUES (1)")
+
+        cleanup_updates = [
+            "worker_sweep_interval_seconds = 300 WHERE worker_sweep_interval_seconds < 30",
+            "inactivity_threshold_days = 90 WHERE inactivity_threshold_days = 0",
+            "feed_sample_size = 100 WHERE feed_sample_size = 0",
+            "sync_staleness_hours = 12 WHERE sync_staleness_hours = 0",
+            "feed_fetch_concurrency = 15 WHERE feed_fetch_concurrency = 0",
+            "crawl_concurrency = 3 WHERE crawl_concurrency = 0",
+            "profile_analysis_batch_size = 30 WHERE profile_analysis_batch_size = 0",
+        ]
+        for update in cleanup_updates:
+            conn.execute(f"UPDATE global_settings SET {update}")
 
         conn.commit()
     finally:

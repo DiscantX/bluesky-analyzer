@@ -949,47 +949,139 @@ async function submitAddAccount() {
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
+//
+// Every setting maps to an input whose id is `set-{db_column_name}`.
+// The loader and saver iterate this list automatically — adding a new setting
+// only requires adding a row to the HTML and the key here.
+//
+// Toggle (boolean) inputs are identified by their type="checkbox".
+ 
+const SETTINGS_KEYS = [
+  // Analysis
+  "inactivity_threshold_days",
+  "repost_ratio_threshold",
+  "feed_sample_size",
+  // Sync
+  "sync_staleness_hours",
+  "worker_sweep_interval_seconds",
+  "staleness_tier2_days",
+  "staleness_tier1_days",
+  "staleness_tier0_days",
+  "ignore_staleness_threshold_days",
+  // API
+  "feed_fetch_concurrency",
+  "disable_internal_rate_limits",
+  "api_max_retries",
+  "api_base_backoff_seconds",
+  "api_polite_delay_ms",
+  // Crawl
+  "crawl_concurrency",
+  "crawl_hydration_concurrency",
+  "min_connection_threshold",
+  "crawl_budget_mb",
+  // Profile loop
+  "profile_analysis_batch_size",
+  "profile_analysis_staleness_days",
+  "profile_analysis_inter_batch_sleep_seconds",
+  "profile_analysis_idle_sleep_seconds",
+  // Graph
+  "clustering_top_n",
+  "louvain_max_nodes",
+];
+ 
+// Snapshot of values as loaded from the server — used for dirty detection
+let _settingsBaseline = {};
+ 
+function switchSettingsTab(tab) {
+  document.querySelectorAll(".stab").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll(".stab-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === tab));
+}
+ 
 async function openSettings() {
   try {
-    state.settings = await api("/api/settings/");
-    el("set-inactivity").value = state.settings.inactivity_threshold_days;
-    el("set-repost").value     = state.settings.repost_ratio_threshold;
-    el("set-sample").value     = state.settings.feed_sample_size;
-    el("set-staleness").value  = state.settings.sync_staleness_hours;
-    el("set-sweep").value      = state.settings.worker_sweep_interval_seconds;
-    el("set-min-conn").value   = state.settings.min_connection_threshold;
-    el("set-crawl-conc").value = state.settings.crawl_concurrency;
-    el("set-budget").value     = state.settings.crawl_budget_mb;
-    el("set-disable-rate-limits").checked = state.settings.disable_internal_rate_limits;
+    const data = await api("/api/settings/");
+    _settingsBaseline = { ...data };
+ 
+    for (const key of SETTINGS_KEYS) {
+      const input = document.getElementById(`set-${key}`);
+      if (!input) continue;
+      if (input.type === "checkbox") {
+        input.checked = !!data[key];
+      } else {
+        input.value = data[key] ?? "";
+      }
+      input.classList.remove("dirty");
+      // Attach dirty listener (idempotent via named handler)
+      input.oninput  = () => _markDirty(key);
+      input.onchange = () => _markDirty(key);
+    }
+ 
+    const hint = el("settings-dirty-hint");
+    if (hint) hint.textContent = "";
+    
+    const saveBtn = el("settings-save-btn");
+    if (saveBtn) saveBtn.disabled = false;
 
-    el("settings-modal").classList.add("open");
+    switchSettingsTab("analysis");
+    const modal = el("settings-modal");
+    if (modal) modal.classList.add("open");
   } catch (e) {
-    toast("Failed to load settings", "error");
+    console.error("openSettings failed:", e);
+    toast("Can't open settings", "error");
   }
 }
-
+ 
+function _markDirty(key) {
+  const input = document.getElementById(`set-${key}`);
+  if (!input) return;
+ 
+  const current = input.type === "checkbox" ? input.checked : (
+    input.type === "number" ? Number(input.value) : input.value
+  );
+  const original = _settingsBaseline[key];
+  const isDirty = String(current) !== String(original);
+  input.classList.toggle("dirty", isDirty);
+ 
+  const anyDirty = SETTINGS_KEYS.some(k => {
+    const el = document.getElementById(`set-${k}`);
+    return el && el.classList.contains("dirty");
+  });
+  el("settings-dirty-hint").textContent = anyDirty ? "Unsaved changes" : "";
+}
+ 
 function closeSettings() {
   el("settings-modal").classList.remove("open");
 }
-
+ 
 async function submitSettings() {
-  const payload = {
-    inactivity_threshold_days:     parseInt(el("set-inactivity").value),
-    repost_ratio_threshold:        parseFloat(el("set-repost").value),
-    feed_sample_size:              parseInt(el("set-sample").value),
-    sync_staleness_hours:          parseInt(el("set-staleness").value),
-    worker_sweep_interval_seconds: parseInt(el("set-sweep").value),
-    min_connection_threshold:      parseInt(el("set-min-conn").value),
-    crawl_concurrency:             parseInt(el("set-crawl-conc").value),
-    crawl_budget_mb:               parseInt(el("set-budget").value),
-    disable_internal_rate_limits:  el("set-disable-rate-limits").checked,
-  };
+  const payload = {};
+  for (const key of SETTINGS_KEYS) {
+    const input = document.getElementById(`set-${key}`);
+    if (!input) continue;
+    if (input.type === "checkbox") {
+      payload[key] = input.checked;
+    } else if (input.type === "number") {
+      payload[key] = Number(input.value);
+    } else {
+      payload[key] = input.value;
+    }
+  }
+ 
   try {
+    el("settings-save-btn").disabled = true;
     await api("/api/settings/", { method: "PATCH", body: JSON.stringify(payload) });
-    toast("Settings saved (restart may be required for some values)");
+    _settingsBaseline = { ...payload };
+    SETTINGS_KEYS.forEach(k => {
+      const inp = document.getElementById(`set-${k}`);
+      if (inp) inp.classList.remove("dirty");
+    });
+    el("settings-dirty-hint").textContent = "";
+    toast("Settings saved.");
     closeSettings();
   } catch (e) {
-    toast(e.message, "error");
+    toast(e.message || "Failed to save settings", "error");
+  } finally {
+    el("settings-save-btn").disabled = false;
   }
 }
 
