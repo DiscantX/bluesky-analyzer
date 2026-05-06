@@ -2,6 +2,11 @@
 analyzer/fetch.py
 Async paginated fetching of follows, followers, and author feeds.
 Each function yields results so callers can stream progress.
+
+OPTIMIZATIONS APPLIED:
+  - Fix 3: Reduced polite delay between API pages from 100ms → 10ms.
+            With 100 paginated requests this was 10 seconds of pure sleep.
+            10ms is still respectful; Bluesky allows rapid pagination.
 """
 
 from __future__ import annotations
@@ -15,6 +20,11 @@ from db.models import GlobalSettings
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# FIX 3: Reduced from 0.1 (100ms) to 0.01 (10ms).
+# 100ms * 100 pages = 10 dead seconds per large follows list.
+# 10ms is still a polite delay while being 10x faster.
+_POLITE_DELAY = 0.01
 
 
 async def fetch_all_follows(client: BskyClient, actor: str) -> list:
@@ -30,7 +40,7 @@ async def fetch_all_follows(client: BskyClient, actor: str) -> list:
         if not cursor or not batch:
             break
         if not settings.disable_internal_rate_limits:
-            await asyncio.sleep(0.1)   # small polite delay between pages
+            await asyncio.sleep(_POLITE_DELAY)
     logger.info(f"Fetched {len(results)} follows for {actor}.")
     return results
 
@@ -48,7 +58,7 @@ async def fetch_all_followers(client: BskyClient, actor: str) -> list:
         if not cursor or not batch:
             break
         if not settings.disable_internal_rate_limits:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(_POLITE_DELAY)
     logger.info(f"Fetched {len(results)} followers for {actor}.")
     return results
 
@@ -68,7 +78,7 @@ async def fetch_profiles_detailed(client: BskyClient, dids: list[str]) -> list:
         except Exception as e:
             logger.error(f"Failed to fetch profiles batch: {e}")
         if not settings.disable_internal_rate_limits:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(_POLITE_DELAY)
     return results
 
 
@@ -135,7 +145,12 @@ async def public_fetch_graph(
 
 
 async def public_fetch_profiles(dids: list[str]) -> list[dict]:
-    """Fetch public profile details from AppView in batches of 25."""
+    """
+    Fetch public profile details from AppView in batches of 25.
+
+    FIX 5 (partial): Polite delay also reduced to 10ms here.
+    Full concurrency improvement requires the semaphore refactor in crawl.py.
+    """
     settings = await GlobalSettings.get(id=1)
     results = []
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -143,7 +158,7 @@ async def public_fetch_profiles(dids: list[str]) -> list[dict]:
             batch = dids[i:i + 25]
             from analyzer.manager import global_req_tracker
             global_req_tracker.record()
-            
+
             params = [("actors", did) for did in batch]
             try:
                 resp = await client.get(
@@ -155,7 +170,7 @@ async def public_fetch_profiles(dids: list[str]) -> list[dict]:
             except Exception as e:
                 logger.error(f"Public profile hydration failed: {e}")
             if not settings.disable_internal_rate_limits:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(_POLITE_DELAY)
     return results
 
 
@@ -174,9 +189,8 @@ async def fetch_all_graph_public(actor_did: str, collection: str = "follows", on
             cursor = data.get("cursor")
             if not cursor or not batch:
                 break
-            # Polite delay for public API
             if not settings.disable_internal_rate_limits:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(_POLITE_DELAY)
         except Exception as e:
             logger.error(f"Public fetch failed for {actor_did} {collection}: {e}")
             break

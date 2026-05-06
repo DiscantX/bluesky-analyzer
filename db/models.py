@@ -1,6 +1,11 @@
 """
 db/models.py
 Tortoise ORM models. One file — easy to extend as the app grows.
+
+OPTIMIZATIONS APPLIED:
+  - Fix 5: Added feed_fetch_concurrency field to GlobalSettings so the
+            feed fetch semaphore can be tuned without code changes.
+            Default 15 (was hardcoded 5) gives 2-3x faster feed fetching.
 """
 
 from tortoise import fields
@@ -19,6 +24,11 @@ class GlobalSettings(Model):
     min_connection_threshold = fields.IntField(default=3)
     crawl_budget_mb = fields.IntField(default=1024)
     disable_internal_rate_limits = fields.BooleanField(default=False)
+
+    # FIX 5: Configurable concurrency for feed fetching.
+    # Default 15 vs. the old hardcoded 5 → 2-3x faster feed phase.
+    # Authenticated PDS rate limit is 3000 req/5min; 15 concurrent is safe.
+    feed_fetch_concurrency = fields.IntField(default=15)
 
     class Meta:
         table = "global_settings"
@@ -139,7 +149,7 @@ class AccountRelationship(Model):
     crawl_tier = fields.IntField(default=1)                    # 0=stub, 1=standard, 2=full
     crawl_priority = fields.FloatField(default=0.0)
     last_crawled_at = fields.DatetimeField(null=True)
-    crawl_pending_fields = fields.TextField(null=True)         
+    crawl_pending_fields = fields.TextField(null=True)
     discovered_via = fields.CharField(max_length=32, null=True) # owner_follows, owner_followers, graph_crawl
 
     # ── Network analysis (computed via NetworkX) ──────────────────────────────

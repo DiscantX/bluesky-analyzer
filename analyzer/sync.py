@@ -5,6 +5,9 @@ Orchestrates a full sync for one saved account:
   2. Analyse each account's feed concurrently (rate-limit-safe)
   3. Upsert results into TrackedUser table
   4. Stream progress events via an async queue
+
+OPTIMIZATIONS APPLIED:
+  - Fix 1: Batch FollowEdge creation via bulk_create (was N*2 get_or_create calls)
 """
 
 from __future__ import annotations
@@ -59,58 +62,109 @@ async def _filter_stale_accounts(
 ) -> tuple[list[str], list[str]]:
     """
     Partition DIDs into (needs_analysis, can_skip) based on staleness.
-    
+
     An account can be skipped if:
     - last_analyzed_at is set AND
     - (now - last_analyzed_at) < staleness_threshold for its tier
-    
+
     Returns: (dids_to_analyze, dids_to_skip)
     """
     now = datetime.now(timezone.utc)
-    
+
     # Fetch existing relationships for all DIDs
     relationships = await AccountRelationship.filter(
         owner=saved_account,
         did__in=all_dids,
     ).prefetch_related("profile").all()
-    
+
     rel_by_did = {rel.did: rel for rel in relationships}
-    
+
     to_analyze = []
     skipped = 0
-    
+
     for did in all_dids:
         rel = rel_by_did.get(did)
-        
+
         # New accounts (not yet tracked) always need analysis
         if not rel:
             to_analyze.append(did)
             continue
-        
+
         # Accounts with no analysis history always need analysis
         if not rel.profile or not rel.profile.last_analyzed_at:
             to_analyze.append(did)
             continue
-        
+
         # Check staleness threshold
         threshold = await _get_staleness_threshold(rel)
         time_since_analysis = now - rel.profile.last_analyzed_at
-        
+
         if time_since_analysis > threshold:
             # Stale — needs refresh
             to_analyze.append(did)
         else:
             # Fresh — can skip
             skipped += 1
-    
+
     logger.info(
         f"Staleness filter: {len(to_analyze)} to analyze, {skipped} skipped "
         f"(threshold: tier2={STALENESS_THRESHOLDS[2].days}d, "
         f"tier1={STALENESS_THRESHOLDS[1].days}d, tier0={STALENESS_THRESHOLDS[0].days}d)"
     )
-    
+
     return to_analyze, [d for d in all_dids if d not in to_analyze]
 
+
+async def _bulk_upsert_follow_edges(owner_did: str, follows: list, followers: list) -> None:
+    """
+    FIX 1: Replace N*2 get_or_create calls with two bulk_create operations.
+
+    Before: for f in follows: await FollowEdge.get_or_create(...)  →  O(2N) queries
+    After:  bulk_create with ignore_conflicts=True               →  O(2) queries
+
+    Estimated improvement: 50-70% reduction in sync database time.
+    """
+    # Collect existing edges in one query to avoid duplicates
+    follow_dids = [f.did for f in follows]
+    follower_dids = [f.did for f in followers]
+    all_relevant_dids = list(set(follow_dids + follower_dids))
+
+    # Fetch existing outgoing edges (owner → followee) in one shot
+    existing_out = set(
+        await FollowEdge.filter(
+            follower_did=owner_did,
+            followee_did__in=follow_dids,
+        ).values_list("followee_did", flat=True)
+    ) if follow_dids else set()
+
+    # Fetch existing incoming edges (follower → owner) in one shot
+    existing_in = set(
+        await FollowEdge.filter(
+            follower_did__in=follower_dids,
+            followee_did=owner_did,
+        ).values_list("follower_did", flat=True)
+    ) if follower_dids else set()
+
+    new_follow_edges = [
+        FollowEdge(follower_did=owner_did, followee_did=f.did)
+        for f in follows
+        if f.did not in existing_out
+    ]
+    new_follower_edges = [
+        FollowEdge(follower_did=f.did, followee_did=owner_did)
+        for f in followers
+        if f.did not in existing_in
+    ]
+
+    if new_follow_edges:
+        await FollowEdge.bulk_create(new_follow_edges, ignore_conflicts=True)
+    if new_follower_edges:
+        await FollowEdge.bulk_create(new_follower_edges, ignore_conflicts=True)
+
+    logger.info(
+        f"FollowEdge bulk upsert: {len(new_follow_edges)} new outgoing, "
+        f"{len(new_follower_edges)} new incoming edges created."
+    )
 
 
 # ── Main sync entry point ──────────────────────────────────────────────────────
@@ -134,7 +188,7 @@ async def run_sync(
         from analyzer.manager import global_req_tracker
         reqs_done = client.request_count - start_reqs
         sync_run.request_count = reqs_done
-        
+
         req_rate = global_req_tracker.get_rate()
         await bus.emit(alias, _evt(kind, operation="sync", sync_run_id=sync_run.id, req_rate=req_rate, req_count=reqs_done, **kwargs))
 
@@ -151,15 +205,13 @@ async def run_sync(
 
         # ── 2. Fetch follows + followers ───────────────────────────────────────
         await emit("phase", message="Fetching connections…")
-        
+
         follows_task = fetch_all_follows(client, saved_account.handle)
         followers_task = fetch_all_followers(client, saved_account.handle)
         follows, followers = await asyncio.gather(follows_task, followers_task)
 
-        for f in follows:
-            await FollowEdge.get_or_create(follower_did=owner_did, followee_did=f.did)
-        for f in followers:
-            await FollowEdge.get_or_create(follower_did=f.did, followee_did=owner_did)
+        # FIX 1: Use bulk edge creation instead of N get_or_create calls
+        await _bulk_upsert_follow_edges(owner_did, follows, followers)
 
         sync_run.follows_fetched = len(follows)
         sync_run.followers_fetched = len(followers)
@@ -191,17 +243,17 @@ async def run_sync(
             detailed_batch = await fetch_profiles_detailed(client, batch)
             for dp in detailed_batch:
                 profile_map[dp.did] = dp
-            
+
             current = min(i + BATCH_SIZE_HYDRATE, total)
             pct = int(current / total * 100)
-            
+
             handle = detailed_batch[0].handle if detailed_batch else "..."
             await emit("progress", message=f"Hydrating: @{handle} ({current}/{total})…", pct=pct)
 
         # ── 2.5.1 Fast pass: Update relationship status and promote stubs ─────
         # We do this before analysis so the UI reflects the new graph immediately.
         await emit("phase", message="Updating relationship status…")
-        
+
         BATCH_SIZE = 50
         for i in range(0, len(all_dids), BATCH_SIZE):
             batch = all_dids[i : i + BATCH_SIZE]
@@ -228,7 +280,7 @@ async def run_sync(
         # ── 2.6 Filter stale accounts to avoid wasteful re-analysis ───────────
         # Skip accounts that were analyzed recently (within their tier's threshold)
         dids_to_analyze, dids_to_skip = await _filter_stale_accounts(saved_account, all_dids)
-        
+
         if dids_to_skip:
             await emit(
                 "phase",

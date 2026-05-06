@@ -71,7 +71,7 @@ def ensure_sqlite_compat_columns() -> None:
         columns_r = {row[1] for row in conn.execute("PRAGMA table_info(crawl_runs)").fetchall()}
         if columns_r and "request_count" not in columns_r:
             conn.execute("ALTER TABLE crawl_runs ADD COLUMN request_count INTEGER NOT NULL DEFAULT 0")
-            
+
         # Update sync_runs
         columns_sr = {row[1] for row in conn.execute("PRAGMA table_info(sync_runs)").fetchall()}
         if columns_sr and "request_count" not in columns_sr:
@@ -91,8 +91,13 @@ def ensure_sqlite_compat_columns() -> None:
 
         # Update global_settings
         columns_gs = {row[1] for row in conn.execute("PRAGMA table_info(global_settings)").fetchall()}
-        if columns_gs and "disable_internal_rate_limits" not in columns_gs:
-            conn.execute("ALTER TABLE global_settings ADD COLUMN disable_internal_rate_limits INT NOT NULL DEFAULT 0")
+        if columns_gs:
+            if "disable_internal_rate_limits" not in columns_gs:
+                conn.execute("ALTER TABLE global_settings ADD COLUMN disable_internal_rate_limits INT NOT NULL DEFAULT 0")
+            # FIX 5: Add feed_fetch_concurrency to existing databases.
+            # Default 15 (3x the old hardcoded 5).
+            if "feed_fetch_concurrency" not in columns_gs:
+                conn.execute("ALTER TABLE global_settings ADD COLUMN feed_fetch_concurrency INTEGER NOT NULL DEFAULT 15")
 
         conn.commit()
     finally:
@@ -114,8 +119,6 @@ TORTOISE_CONFIG = {
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # RegisterTortoise manages init, schema creation, and teardown.
-    # It properly sets up the TortoiseContext required by Tortoise ORM v1.x.
     async with RegisterTortoise(
         app,
         config=TORTOISE_CONFIG,
@@ -129,8 +132,7 @@ async def lifespan(app: FastAPI):
         from db.models import GlobalSettings, SavedAccount
         await GlobalSettings.get_or_create(id=1)
 
-        # Sync accounts.json -> DB on every startup so manually edited
-        # accounts files are picked up automatically.
+        # Sync accounts.json -> DB on every startup
         try:
             import config as cfg
             for acc in cfg.list_saved_accounts():
@@ -152,12 +154,12 @@ async def lifespan(app: FastAPI):
             if worker_module.worker_task:
                 worker_module.worker_task.cancel()
                 tasks.append(worker_module.worker_task)
-            
+
             for alias, task in list(running_tasks.items()):
                 logger.info(f"Cancelling task for {alias}")
                 task.cancel()
                 tasks.append(task)
-            
+
             if tasks:
                 try:
                     await asyncio.wait_for(
@@ -212,7 +214,7 @@ async def client_log(request: Request):
         pass
     return {"status": "ok"}
 
-# ── Page route ────────────────────────────────────────────────────────────────
+# ── Page routes ───────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
@@ -225,7 +227,6 @@ async def graph_view(request: Request, alias: str):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
-
 
 # ── Favicon ───────────────────────────────────────────────────────────────────
 @app.get("/favicon.ico", include_in_schema=False)

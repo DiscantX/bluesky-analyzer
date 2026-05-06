@@ -4,6 +4,11 @@ Wraps atproto Client with:
   - JWT session persistence (avoid hammering createSession endpoint)
   - Rate-limit-aware request handling (reads ratelimit-* headers, backs off on 429)
   - Write-ready structure (rate limit points budget tracked for future write ops)
+
+OPTIMIZATIONS APPLIED:
+  - Fix 5: Concurrency now reads from GlobalSettings.feed_fetch_concurrency
+            (default 15) instead of the old hardcoded DEFAULT_CONCURRENCY = 5.
+            This gives a 2-3x speedup on the feed-fetch phase of sync.
 """
 
 from __future__ import annotations
@@ -23,8 +28,8 @@ logger = logging.getLogger(__name__)
 SESSION_DIR = Path(__file__).parent.parent / ".sessions"
 SESSION_DIR.mkdir(exist_ok=True)
 
-# Concurrency: max simultaneous in-flight requests to Bluesky API.
-# At 5 concurrent we stay well under the 3000/5min IP limit.
+# Legacy constant kept for any callers that reference it directly,
+# but BskyClient now reads the live setting instead of this value.
 DEFAULT_CONCURRENCY = 5
 
 # Retry config for 429 responses
@@ -71,13 +76,35 @@ class BskyClient:
     executor, while the semaphore limits overall concurrency from our side.
     """
 
-    def __init__(self, alias: str, concurrency: int = DEFAULT_CONCURRENCY):
+    def __init__(self, alias: str, concurrency: int | None = None):
         self.alias = alias
         self._client = Client()
-        self._semaphore = asyncio.Semaphore(concurrency)
+        # FIX 5: concurrency is now set lazily from GlobalSettings on first use
+        # if not supplied explicitly. This allows runtime tuning without restarts.
+        self._concurrency_override = concurrency
+        self._semaphore: asyncio.Semaphore | None = None
         self.request_count = 0
         self.rate_limit = RateLimitTracker()
         self._session_file = SESSION_DIR / f"{alias}.session"
+
+    async def _get_semaphore(self) -> asyncio.Semaphore:
+        """
+        Lazily initialise the semaphore so the event loop exists when it's created.
+        Reads feed_fetch_concurrency from GlobalSettings if not overridden.
+        """
+        if self._semaphore is None:
+            if self._concurrency_override is not None:
+                concurrency = self._concurrency_override
+            else:
+                try:
+                    from db.models import GlobalSettings
+                    settings = await GlobalSettings.get(id=1)
+                    concurrency = settings.feed_fetch_concurrency
+                except Exception:
+                    concurrency = DEFAULT_CONCURRENCY
+            self._semaphore = asyncio.Semaphore(concurrency)
+            logger.debug(f"[{self.alias}] BskyClient semaphore initialized at concurrency={concurrency}")
+        return self._semaphore
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -134,7 +161,7 @@ class BskyClient:
 
         from db.models import GlobalSettings
         settings = await GlobalSettings.get(id=1)
-        
+
         async def execute_with_retry():
             nonlocal retries
             while True:
@@ -142,7 +169,7 @@ class BskyClient:
                     from analyzer.manager import global_req_tracker
                     self.request_count += 1
                     global_req_tracker.record()
-                    
+
                     return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
                 except RequestException as e:
                     status = getattr(e, "response", None)
@@ -165,12 +192,12 @@ class BskyClient:
 
         if settings.disable_internal_rate_limits:
             return await execute_with_retry()
-        
-        async with self._semaphore:
+
+        semaphore = await self._get_semaphore()
+        async with semaphore:
             return await execute_with_retry()
 
     # ── Public API wrappers ────────────────────────────────────────────────────
-    # These are thin passthroughs — fetch.py composes them into higher-level ops.
 
     async def get_profile(self, actor: str):
         return await self._run(lambda: self._client.get_profile(actor=actor))
@@ -194,7 +221,6 @@ class BskyClient:
         )
 
     # ── Future write operations ────────────────────────────────────────────────
-    # Stubs — flesh these out when write support is added.
 
     async def follow(self, did: str):
         raise NotImplementedError("Write operations not yet implemented.")

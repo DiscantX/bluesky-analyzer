@@ -13,6 +13,9 @@ class SettingsSchema(BaseModel):
     crawl_concurrency: int
     min_connection_threshold: int
     crawl_budget_mb: int
+    # FIX 5: Exposed so the UI can tune feed concurrency without a code change.
+    # Default 15; safe upper bound is ~25 before 429s become likely.
+    feed_fetch_concurrency: int = 15
 
 @router.get("/", response_model=SettingsSchema)
 async def get_settings():
@@ -26,7 +29,7 @@ async def update_settings(data: SettingsSchema):
     settings = await GlobalSettings.get_or_none(id=1)
     if not settings:
         settings = await GlobalSettings.create(id=1)
-    
+
     settings.inactivity_threshold_days = data.inactivity_threshold_days
     settings.repost_ratio_threshold = data.repost_ratio_threshold
     settings.feed_sample_size = data.feed_sample_size
@@ -35,6 +38,7 @@ async def update_settings(data: SettingsSchema):
     settings.crawl_concurrency = data.crawl_concurrency
     settings.min_connection_threshold = data.min_connection_threshold
     settings.crawl_budget_mb = data.crawl_budget_mb
-    
+    settings.feed_fetch_concurrency = data.feed_fetch_concurrency
+
     await settings.save()
     return settings
