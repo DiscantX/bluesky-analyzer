@@ -20,6 +20,7 @@ let lastClickTime = 0;
 let lastClickedNode = null; // Used for double-click detection
 let selectedNode = null;
 let neighbors = new Set();
+let framesSinceLoad = 0; // Track simulation progress for camera following
 
 let currentGraphMode = 'macro'; // 'macro', 'community_overview', 'community_detail', 'ego'
 let currentCommunityId = null; // Tracks which community is being viewed in detail
@@ -34,6 +35,10 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
   const communityOverviewBtn = document.getElementById('community-overview-btn');
   const backToCommunityBtn = document.getElementById('back-to-community-btn');
   
+  // Reset selection state and close panel before loading new view
+  deselectNode();
+  framesSinceLoad = 0;
+
   resetBtn.style.display = mode === 'macro' ? 'none' : 'block';
   
   try {
@@ -215,7 +220,29 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
     graph.d3Force('charge').strength(-120);
     graph.d3Force('link').distance(50);
 
+    // Pre-selection and Centering Logic for drill-downs (UX Improvement)
+    if (spawnAt) {
+        // Immediately center on the explosion point
+        graph.centerAt(spawnAt.x, spawnAt.y);
+    }
+
+    if (mode === 'ego' && seedDid) {
+        const target = nodes.find(n => n.did === seedDid);
+        if (target) handleNodeSelection(target);
+    } else if (mode === 'community' && communityId !== null && nodes.length > 0) {
+        // For community shatter, pre-select the highest-ranked member
+        handleNodeSelection(nodes[0]);
+    }
+
     // Freeze simulation when stable to save CPU (Design Doc Section 7)
+    graph.onEngineTick(() => {
+        framesSinceLoad++;
+        // Follow the selected node during the first 2 seconds of expansion (shatter effect tracking)
+        if (selectedNode && framesSinceLoad < 120) {
+            centerOnNode(selectedNode, false);
+        }
+    });
+
     graph.onEngineStop(() => {
         statusEl.textContent = 'Simulation stabilized.';
         console.log('Graph simulation stopped.');
@@ -235,20 +262,48 @@ async function handleNodeSelection(node) {
     selectedNode = node;
     neighbors = new Set(node.neighbors || []);
     
-    graph.centerAt(node.x, node.y, 1000);
-    graph.zoom(4, 1000);
+    // Open panel first so we can calculate the correct unoccluded offset
+    showNodeDetails(node);
+    
+    centerOnNode(node, true);
     
     // Force re-render for highlighting
     graph.nodeRelSize(CONFIG.nodeRelSize);
+}
+
+/**
+ * Centers the camera on a node, accounting for UI occlusion (side panel).
+ */
+function centerOnNode(node, animate = true) {
+    if (!graph || !node) return;
+
+    const duration = animate ? 1000 : 0;
+    const currentZoom = graph.zoom() || 1;
+
+    // During initial selection, force zoom to 4. 
+    // During simulation tracking, respect the user's current zoom level to allow manual scrolling.
+    const targetZoom = animate ? 4 : currentZoom;
     
-    showNodeDetails(node);
+    // Calculate visual offset: If panel is on the right, shift camera focus to the right
+    // to keep the node centered in the left-hand workspace.
+    const panel = document.getElementById('side-panel');
+    
+    // Fallback to 350px (standard sidebar width) if panel is open but width isn't yet rendered
+    const isPanelOpen = panel && panel.classList.contains('open');
+    const panelWidth = isPanelOpen ? (panel.offsetWidth || 350) : 0;
+    
+    const offset = (panelWidth / 2) / targetZoom;
+
+    if (animate) graph.zoom(targetZoom, duration);
+    graph.centerAt(node.x + offset, node.y, duration);
 }
 
 function deselectNode() {
     selectedNode = null;
     neighbors.clear();
-    document.getElementById('side-panel').classList.remove('open');
-    graph.nodeRelSize(CONFIG.nodeRelSize);
+    const panel = document.getElementById('side-panel');
+    if (panel) panel.classList.remove('open');
+    if (graph) graph.nodeRelSize(CONFIG.nodeRelSize);
 }
 
 async function showNodeDetails(node) {
