@@ -121,8 +121,11 @@ async def worker_loop():
         logger.info(f"Refreshing crawl priorities for {account.alias}...")
         await refresh_priorities(account)
         if account.auto_sync_enabled:
+            # Start sync; it will automatically trigger a crawl upon completion.
             schedule_sync(account)
-        if account.auto_crawl_enabled and account.last_synced_at:
+        elif account.auto_crawl_enabled and account.last_synced_at:
+            # Only start crawl if sync is not enabled for this account.
+            # (If sync is enabled, we wait for it to finish first)
             schedule_crawl(account)
 
     while True:
@@ -166,6 +169,7 @@ async def run_auto_sync(account: SavedAccount):
 
         account = await SavedAccount.get(id=account.id)
         if account.auto_crawl_enabled:
+            await asyncio.sleep(2) # Give the user a moment to see the Sync Complete message
             schedule_crawl(account)
     except asyncio.CancelledError:
         logger.info(f"Auto-sync cancelled for {account.alias}.")

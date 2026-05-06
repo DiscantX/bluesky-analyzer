@@ -353,7 +353,9 @@ async def run_sync(
         # ── 5. Run Graph Analysis ──────────────────────────────────────────────
         await emit("phase", message="Computing network metrics (FlowRank/Communities)…")
         try:
-            await run_graph_analysis(saved_account)
+            async def on_graph_prog(msg, pct=None):
+                await emit("progress", message=f"Graph: {msg}", pct=pct)
+            await run_graph_analysis(saved_account, on_progress=on_graph_prog)
         except Exception as e:
             logger.exception(f"Graph analysis failed after sync for {saved_account.handle}: {e}")
             await emit("phase", message="Sync complete; graph metrics will retry later.")

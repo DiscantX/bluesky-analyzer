@@ -29,12 +29,14 @@ def _chunks(values: list[str], size: int = SQLITE_IN_CHUNK):
     for i in range(0, len(values), size):
         yield values[i:i + size]
 
-async def run_graph_analysis(owner: SavedAccount):
+async def run_graph_analysis(owner: SavedAccount, on_progress=None):
     """
     Orchestrates the graph metric computation for a specific account.
     Loads edges, builds a NetworkX graph, computes metrics, and persists them.
     """
     logger.info(f"Starting graph analysis for {owner.handle}...")
+    if on_progress:
+        await on_progress("Building social graph...", 5)
     
     # 1. Get all nodes in the local universe for this owner
     relationships = await AccountRelationship.filter(owner=owner).all()
@@ -62,6 +64,9 @@ async def run_graph_analysis(owner: SavedAccount):
     if G.number_of_nodes() == 0:
         return
 
+    if on_progress:
+        await on_progress(f"Computing metrics ({G.number_of_nodes()} nodes)...", 20)
+
     # 4. Compute metrics in a thread pool to avoid blocking the event loop
     loop = asyncio.get_running_loop()
     results = await loop.run_in_executor(None, _compute_metrics_sync, G)
@@ -80,6 +85,9 @@ async def run_graph_analysis(owner: SavedAccount):
                 rel.id,
             ))
 
+    if on_progress:
+        await on_progress("Persisting results...", 50)
+
     if updates:
         conn = connections.get("default")
         for batch in _chunks(updates, SQLITE_IN_CHUNK):
@@ -96,14 +104,18 @@ async def run_graph_analysis(owner: SavedAccount):
             )
 
     # NEW STEP: Ensure top keywords are populated for key community members
-    await _ensure_community_keywords(owner)
+    await _ensure_community_keywords(owner, on_progress=on_progress)
 
     # 6. Generate Community Metadata
+    if on_progress:
+        await on_progress("Generating community summaries...", 90)
     await generate_community_summaries(owner)
 
+    if on_progress:
+        await on_progress("Graph analysis complete.", 100)
     logger.info(f"Graph analysis complete for {owner.handle}. Nodes: {G.number_of_nodes()}, Edges: {edge_count}")
 
-async def generate_community_summaries(owner: SavedAccount):
+async def generate_community_summaries(owner: SavedAccount, on_progress=None):
     """Aggregate top keywords and generate names for detected communities."""
     conn = connections.get("default")
     
@@ -210,7 +222,7 @@ async def generate_community_summaries(owner: SavedAccount):
             }
         )
 
-async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: int = 100):
+async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: int = 100, on_progress=None):
     """
     Identifies top N members per community and ensures their top_keywords are populated.
     If keywords are missing or stale, their feeds are re-analyzed.
@@ -277,6 +289,8 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
 
     logger.info(f"Re-analyzing feeds for {len(dids_to_reanalyze)} key community members...")
 
+    total_reanalyze = len(dids_to_reanalyze)
+    completed = 0
     client = await get_client(owner)
 
     owner_follows_list = await fetch_all_follows(client, owner.handle)
@@ -289,6 +303,7 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
         dids_to_reanalyze,
         limit_per_actor=settings.feed_sample_size,
     ):
+        completed += 1
         profile_obj = profiles_to_reanalyze.get(did)
         if not profile_obj:
             logger.warning(f"Profile object not found for DID {did} during keyword re-analysis.")
@@ -311,6 +326,10 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
         # member is the dictionary from the top_members list in the outer loop
         cid = member.get('community_id', 'N/A')
         logger.debug(f"Updated keywords for {profile_obj.handle} (Community {cid})")
+        
+        if on_progress and completed % 5 == 0:
+            pct = 50 + int((completed / total_reanalyze) * 40) # 50% to 90%
+            await on_progress(f"Community keywords: {completed}/{total_reanalyze}...", pct)
 
     logger.info(f"Finished keyword re-analysis for key community members for {owner.handle}.")
 

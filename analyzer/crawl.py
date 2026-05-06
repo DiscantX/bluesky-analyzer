@@ -403,7 +403,10 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     logger.info(f"Batch crawl finished for {owner.alias}. Refreshing graph metrics.")
     await emit("Computing network metrics...")
     try:
-        await run_graph_analysis(owner)
+        async def on_graph_prog(msg, pct=None):
+            # In crawl, emit helper is (message, pct, req_inc)
+            await emit(f"Graph: {msg}", pct=pct)
+        await run_graph_analysis(owner, on_progress=on_graph_prog)
     except Exception as e:
         logger.exception(f"Graph analysis failed after crawl for {owner.alias}: {e}")
         await emit("Crawl complete; graph metrics will retry later.")
