@@ -157,7 +157,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
         account=owner,
         status="running",
         batch_size=batch_size,
-        last_message="Preparing crawl queue...",
+        last_message="Seeding crawl queue...",
     )
     from analyzer.manager import current_alias_var, current_op_var
     current_alias_var.set(owner.alias)
@@ -187,8 +187,8 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             except TypeError:
                 await on_progress(message, pct)
 
-    await emit("Preparing crawl queue...")
-    seeded = await seed_crawl_queue(owner)
+    await emit("Seeding crawl queue...")
+    seeded = await seed_crawl_queue(owner, on_progress=emit)
     crawl_run.candidates_queued = await CrawlQueueItem.filter(
         account=owner,
         status="pending",
@@ -453,14 +453,15 @@ async def enqueue_crawl_user(owner: SavedAccount, user: AccountRelationship) -> 
     return True
 
 
-async def seed_crawl_queue(owner: SavedAccount, limit: int = 5000) -> int:
+async def seed_crawl_queue(owner: SavedAccount, limit: int = 5000, on_progress=None) -> int:
     """Populate the persisted queue from tracked users that are ready to expand."""
+    settings = await GlobalSettings.get(id=1)
     now = _now()
     expandable = (
         Q(i_follow_them=True) |
         Q(they_follow_me=True) |
         Q(crawl_tier__gt=0) |
-        Q(in_subgraph_degree__gte=MIN_CONNECTION_THRESHOLD)
+        Q(in_subgraph_degree__gte=settings.min_connection_threshold)
     )
     users = await AccountRelationship.filter(
         owner=owner,
@@ -470,12 +471,20 @@ async def seed_crawl_queue(owner: SavedAccount, limit: int = 5000) -> int:
     ).filter(
         Q(last_crawled_at__isnull=True) |
         Q(last_crawled_at__lt=now - timedelta(days=1))
-    ).order_by("last_crawled_at", "-crawl_priority").limit(limit)
+    ).prefetch_related("profile").order_by("last_crawled_at", "-crawl_priority").limit(limit)
+
+    total = len(users)
+    if on_progress and total > 0:
+        await on_progress(f"Seeding queue: 0/{total}...", pct=0)
 
     created = 0
-    for user in users:
+    for i, user in enumerate(users):
         if await enqueue_crawl_user(owner, user):
             created += 1
+        if on_progress and (i + 1) % 100 == 0:
+            pct = int(((i + 1) / total) * 100)
+            await on_progress(f"Seeding queue: {i+1}/{total}...", pct=pct)
+
     return created
 
 
