@@ -599,6 +599,7 @@ async def get_stats(owner_id: int) -> dict[str, Any]:
             SUM(CASE WHEN r.is_follower_only = 1 THEN 1 ELSE 0 END) AS follower_only,
             SUM(CASE WHEN r.interacted_with_owner = 0 AND r.i_follow_them = 1 THEN 1 ELSE 0 END) AS no_interaction,
             COUNT(*) AS graph_size,
+            SUM(CASE WHEN p.last_hydrated_at IS NOT NULL THEN 1 ELSE 0 END) AS hydrated,
             SUM(CASE WHEN p.last_analyzed_at IS NOT NULL THEN 1 ELSE 0 END) AS analysed,
             SUM(CASE WHEN p.last_analyzed_at IS NULL THEN 1 ELSE 0 END) AS pending,
             SUM(CASE WHEN r.crawl_tier = 0 THEN 1 ELSE 0 END) AS stubs_count

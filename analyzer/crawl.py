@@ -98,11 +98,26 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     )
     await reset_interrupted_crawl_work(owner)
 
-    async def emit(message: str, pct: int | None = None):
+    session_start = datetime.now(timezone.utc)
+    # Shared counters for the active crawl session
+    session_reqs = 0
+    session_found = 0
+
+    async def emit(message: str, pct: int | None = None, **kwargs):
         crawl_run.last_message = message
-        await crawl_run.save(update_fields=["last_message"])
+        crawl_run.request_count += kwargs.get("req_inc", 0)
+        crawl_run.discovered_count += kwargs.get("found_inc", 0)
+        await crawl_run.save(update_fields=["last_message", "request_count", "discovered_count"])
+        
+        elapsed = (datetime.now(timezone.utc) - session_start).total_seconds()
+        req_rate = 0
+        found_rate = 0
+        if elapsed > 2: # Wait a few seconds for stable averages
+            req_rate = round((crawl_run.request_count / elapsed) * 60, 1)
+            found_rate = round((crawl_run.discovered_count / elapsed) * 60, 1)
+
         if on_progress:
-            await on_progress(message, pct)
+            await on_progress(message, pct, req_rate=req_rate, found_rate=found_rate)
 
     await emit("Preparing crawl queue...")
     seeded = await seed_crawl_queue(owner)
@@ -140,6 +155,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     rel_tier_by_did = {rel.did: rel.crawl_tier for rel in owner_relationships}
 
     async def process_candidate(item: CrawlQueueItem):
+        nonlocal session_reqs, session_found
         async with crawl_semaphore:
             user = await AccountRelationship.filter(owner=owner, did=item.did).prefetch_related("profile").first()
             if not user:
@@ -168,10 +184,9 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             msg = f"Expanding network from @{user_profile.handle}..."
             logger.info(f"{msg} (priority: {user.crawl_priority:.2f})")
             await emit(msg)
-            discovered_new = 0
 
             async def process_page(batch, direction: str):
-                nonlocal discovered_new
+                nonlocal session_reqs, session_found
                 page_dids = [f["did"] for f in batch]
                 
                 # Determine edges based on direction
@@ -220,11 +235,13 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                         target_user = await AccountRelationship.filter(owner=owner, did=target_did).first()
 
                     if target_user.first_seen_at and target_user.first_seen_at >= _now() - timedelta(seconds=5):
-                        discovered_new += 1
+                        session_found += 1
 
                     # We will update in_subgraph_degree in a batch after hydration
                     await enqueue_crawl_user(owner, target_user)
 
+                hydration_reqs = math.ceil(len(page_dids) / 25)
+                session_reqs += hydration_reqs
                 await hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit)
                 
                 # Recalculate degree for the batch
@@ -245,6 +262,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     cursor = item.cursor if direction == "follows" else None
                     while True:
                         data = await public_fetch_graph(user.did, direction, cursor=cursor)
+                        session_reqs += 1
                         batch = data.get(direction, [])
                         if batch:
                             await process_page(batch, direction)
@@ -281,8 +299,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             item.completed_at = _now()
             await item.save(update_fields=["status", "cursor", "completed_at"])
             crawl_run.candidates_completed += 1
-            crawl_run.discovered_count += discovered_new
-            await crawl_run.save(update_fields=["candidates_completed", "discovered_count"])
+            await crawl_run.save(update_fields=["candidates_completed"])
 
     # Process all candidates concurrently
     tasks = [process_candidate(item) for item in candidates]

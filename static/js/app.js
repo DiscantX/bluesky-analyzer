@@ -256,6 +256,8 @@ function userRow(u) {
         ${avatar(u)}
         <div class="user-name" title="${u.display_name}" style="min-width:0">${u.display_name || "—"}</div>
         <div class="user-handle" title="${u.handle}" style="min-width:0">@${u.handle}</div>
+        <div class="col-stat" title="FlowRank Influence">💎 ${u.flowrank_score > 0 ? (u.flowrank_score * 1000).toFixed(4) : "—"}</div>
+        <div class="col-stat" title="Community ID">🌐 ${u.community_id != null ? u.community_id : "—"}</div>
         <div class="col-stat">${fmt(u.followers_count)}</div>
         <div class="col-stat">${fmt(u.follows_count)}</div>
         <div class="col-stat">${u.days_since_post != null ? u.days_since_post + "d" : "—"}</div>
@@ -264,8 +266,6 @@ function userRow(u) {
         <div class="col-stat">${fmt(u.sampled_post_count)}</div>
         <div class="col-stat">${fmt(u.repost_count)}</div>
         <div class="col-stat">${fmt(u.original_post_count)}</div>
-        <div class="col-stat" title="FlowRank Influence">💎 ${u.flowrank_score > 0 ? (u.flowrank_score * 1000).toFixed(4) : "—"}</div>
-        <div class="col-stat" title="Community ID">🌐 ${u.community_id != null ? u.community_id : "—"}</div>
         <div class="col-date">${shortDate(u.last_post_at)}</div>
         <div class="col-date">${shortDate(u.last_analyzed_at)}</div>
       </div>
@@ -284,14 +284,13 @@ function renderStats() {
   const s = state.stats;
   el("stat-follows").textContent   = fmt(s.total_follows);
   el("stat-followers").textContent = fmt(s.total_followers);
-  el("stat-inactive").textContent  = fmt(s.inactive);
-  el("stat-repost").textContent    = fmt(s.repost_heavy);
-  el("stat-onesided").textContent  = fmt(s.one_sided);
-  el("stat-nointeract").textContent= fmt(s.no_interaction);
   el("stat-discovered").textContent= fmt(s.graph_size);
   el("stat-stubs").textContent     = fmt(s.stubs_count); // New stat
+  el("stat-hydrated").textContent  = fmt(s.hydrated);
   el("stat-analysed").textContent  = fmt(s.analysed);
   el("stat-pending").textContent   = fmt(s.pending);
+  el("stat-req-rate").textContent   = (s.req_rate || 0) + "/m";
+  el("stat-found-rate").textContent = (s.found_rate || 0) + "/m";
 
   const synced = s.last_synced_at
     ? new Date(s.last_synced_at).toLocaleString()
@@ -412,6 +411,8 @@ function renderUsers() {
       <div></div>
       ${renderHeader("Name", "display_name")}
       ${renderHeader("Handle", "handle")}
+      ${renderHeader("FlowRank", "flowrank_score", true)}
+      ${renderHeader("Group", "community_id", true)}
       ${renderHeader("Followers", "followers_count", true)}
       ${renderHeader("Following", "follows_count", true)}
       ${renderHeader("Inactive", "days_since_post", true)}
@@ -420,8 +421,6 @@ function renderUsers() {
       ${renderHeader("Sampled", "sampled_post_count", true)}
       ${renderHeader("Reposts", "repost_count", true)}
       ${renderHeader("Originals", "original_post_count", true)}
-      ${renderHeader("Rank", "flowrank_score", true)}
-      ${renderHeader("Grp", "community_id", true)}
       ${renderHeader("Last Post", "last_post_at", true)}
       ${renderHeader("Analyzed", "last_analyzed_at", true)}
     </div>
@@ -804,6 +803,11 @@ function attachCrawlStream() {
     const data = JSON.parse(evt.data);
     if (data.kind === "progress" || data.kind === "phase") {
       showSyncBar(data.message, data.pct ?? null);
+      
+      // Update ephemeral rates in state for rendering
+      if (data.req_rate !== undefined) state.stats.req_rate = data.req_rate;
+      if (data.found_rate !== undefined) state.stats.found_rate = data.found_rate;
+      
       fetchStats();
       if (Date.now() - state.lastUserFetch > 2000) {
         fetchUsers(false, true);

@@ -182,8 +182,8 @@ async def run_auto_crawl(account: SavedAccount):
         if latest_run and latest_run.status == "paused" and latest_run.error_message == "Stopped by user.":
             return
 
-        async def on_prog(msg, pct=None):
-            event = {"kind": "progress", "operation": "crawl", "message": f"[Auto] {msg}"}
+        async def on_prog(msg, pct=None, **kwargs):
+            event = {"kind": "progress", "operation": "crawl", "message": f"[Auto] {msg}", **kwargs}
             if pct is not None:
                 event["pct"] = pct
             await bus.emit(account.alias, event)

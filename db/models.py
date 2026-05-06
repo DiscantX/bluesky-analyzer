@@ -73,6 +73,7 @@ class CrawlRun(Model):
     candidates_failed = fields.IntField(default=0)
     candidates_skipped = fields.IntField(default=0)
     discovered_count = fields.IntField(default=0)
+    request_count = fields.IntField(default=0)
     last_message = fields.TextField(null=True)
 
     class Meta:
