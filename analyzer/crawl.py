@@ -116,7 +116,10 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
         logger.info(f"Seeded {seeded} crawl queue items for {owner.alias}")
 
     # Dynamically initialize semaphores based on current GlobalSettings
-    crawl_semaphore = asyncio.Semaphore(settings.crawl_concurrency)
+    concurrency = settings.crawl_concurrency
+    if settings.disable_internal_rate_limits:
+        concurrency = 100 # Effectively disable by high ceiling
+    crawl_semaphore = asyncio.Semaphore(concurrency)
     hydration_semaphore = asyncio.Semaphore(2) # Keep hydration internal limit
 
     candidates = await claim_crawl_items(owner, batch_size)
@@ -222,7 +225,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     # We will update in_subgraph_degree in a batch after hydration
                     await enqueue_crawl_user(owner, target_user)
 
-                await hydrate_stubs(owner, page_dids, hydration_semaphore)
+                await hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit)
                 
                 # Recalculate degree for the batch
                 for did in page_dids:
@@ -257,6 +260,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                         if not next_cursor or not batch:
                             break
                         cursor = next_cursor
+                    if not settings.disable_internal_rate_limits:
                         await asyncio.sleep(0.1)
                         
             except Exception as e:
@@ -382,52 +386,62 @@ async def claim_crawl_items(owner: SavedAccount, batch_size: int) -> list[CrawlQ
     return items
 
 
-async def hydrate_stubs(owner: SavedAccount, dids: list[str], semaphore: asyncio.Semaphore) -> int:
+async def hydrate_stubs(owner: SavedAccount, dids: list[str], semaphore: asyncio.Semaphore, on_progress=None) -> int:
     """Hydrate graph-discovered stubs with public profile counts/avatar data."""
     unique_dids = list(dict.fromkeys(dids))
     if not unique_dids:
         return 0
 
-    async with semaphore:
-        profiles = await public_fetch_profiles(unique_dids)
-
+    total = len(unique_dids)
     hydrated = 0
     hydrated_at = _now()
-    for profile in profiles:
-        did = profile.get("did")
-        if not did:
-            continue
+    BATCH_SIZE = 25
 
-        user = await AccountRelationship.filter(owner=owner, did=did).prefetch_related("profile").first()
-        if not user:
-            continue
+    for i in range(0, total, BATCH_SIZE):
+        batch_dids = unique_dids[i : i + BATCH_SIZE]
+        async with semaphore:
+            profiles = await public_fetch_profiles(batch_dids)
 
-        shared_profile = await user.profile
-        handle = profile.get("handle") or shared_profile.handle
-        shared_profile.handle = handle
-        shared_profile.display_name = profile.get("displayName", shared_profile.display_name) or ""
-        shared_profile.avatar_url = profile.get("avatar", shared_profile.avatar_url) or ""
-        shared_profile.profile_url = f"https://bsky.app/profile/{handle}"
-        shared_profile.followers_count = _profile_value(profile, "followers_count", "followersCount")
-        shared_profile.follows_count = _profile_value(profile, "follows_count", "followsCount")
-        shared_profile.posts_count = _profile_value(profile, "posts_count", "postsCount")
-        shared_profile.description = profile.get("description")
-        shared_profile.banner_url = profile.get("banner")
-        shared_profile.account_created_at = parse_dt(profile.get("createdAt"))
-        shared_profile.labels = json.dumps([l.get("val") for l in profile.get("labels", [])]) if profile.get("labels") else None
-        shared_profile.last_hydrated_at = hydrated_at
-        await shared_profile.save()
-        user.crawl_pending_fields = json.dumps(["feed_sample", "relationship_flags"])
-        user.crawl_priority = await calculate_priority(user)
-        await user.save()
+        for profile in profiles:
+            did = profile.get("did")
+            if not did:
+                continue
 
-        item = await CrawlQueueItem.filter(account=owner, did=did).first()
-        if item:
-            item.handle = handle
-            item.priority = user.crawl_priority
-            item.hydrated_at = hydrated_at
-            await item.save(update_fields=["handle", "priority", "hydrated_at"])
-        hydrated += 1
+            user = await AccountRelationship.filter(owner=owner, did=did).prefetch_related("profile").first()
+            if not user:
+                continue
+
+            shared_profile = await user.profile
+            handle = profile.get("handle") or shared_profile.handle
+            shared_profile.handle = handle
+            shared_profile.display_name = profile.get("displayName", shared_profile.display_name) or ""
+            shared_profile.avatar_url = profile.get("avatar", shared_profile.avatar_url) or ""
+            shared_profile.profile_url = f"https://bsky.app/profile/{handle}"
+            shared_profile.followers_count = _profile_value(profile, "followers_count", "followersCount")
+            shared_profile.follows_count = _profile_value(profile, "follows_count", "followsCount")
+            shared_profile.posts_count = _profile_value(profile, "posts_count", "postsCount")
+            shared_profile.description = profile.get("description")
+            shared_profile.banner_url = profile.get("banner")
+            shared_profile.account_created_at = parse_dt(profile.get("createdAt"))
+            shared_profile.labels = json.dumps([l.get("val") for l in profile.get("labels", [])]) if profile.get("labels") else None
+            shared_profile.last_hydrated_at = hydrated_at
+            await shared_profile.save()
+            user.crawl_pending_fields = json.dumps(["feed_sample", "relationship_flags"])
+            user.crawl_priority = await calculate_priority(user)
+            await user.save()
+
+            item = await CrawlQueueItem.filter(account=owner, did=did).first()
+            if item:
+                item.handle = handle
+                item.priority = user.crawl_priority
+                item.hydrated_at = hydrated_at
+                await item.save(update_fields=["handle", "priority", "hydrated_at"])
+            hydrated += 1
+
+        if on_progress:
+            current = min(i + BATCH_SIZE, total)
+            pct = int((current / total) * 100)
+            await on_progress(f"Hydrating profiles ({current}/{total})...", pct)
 
     return hydrated
 

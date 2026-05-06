@@ -174,7 +174,10 @@ def build_tracked_user_data(
         "description": getattr(profile, "description", None),
         "banner_url": getattr(profile, "banner", None),
         "account_created_at": parse_dt(getattr(profile, "created_at", getattr(profile, "createdAt", None))),
-        "labels": json.dumps([l.val for l in profile.labels]) if getattr(profile, "labels", None) else None,
+        "labels": json.dumps([
+            getattr(l, "val", l.get("val") if isinstance(l, dict) else None) 
+            for l in (getattr(profile, "labels", []) or [])
+        ]) if getattr(profile, "labels", None) else None,
         "i_follow_them": i_follow_them,
         "they_follow_me": they_follow_me,
         "crawl_tier": 1,

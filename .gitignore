@@ -3,6 +3,7 @@ accounts.json
 .sessions/
 
 # Database
+*.db
 data.db
 data.db-shm
 data.db-wal

@@ -18,6 +18,7 @@ class GlobalSettings(Model):
     crawl_concurrency = fields.IntField(default=3)
     min_connection_threshold = fields.IntField(default=3)
     crawl_budget_mb = fields.IntField(default=1024)
+    disable_internal_rate_limits = fields.BooleanField(default=False)
 
     class Meta:
         table = "global_settings"

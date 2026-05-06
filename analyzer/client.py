@@ -131,12 +131,14 @@ class BskyClient:
         loop = asyncio.get_event_loop()
         retries = 0
 
-        async with self._semaphore:
+        from db.models import GlobalSettings
+        settings = await GlobalSettings.get(id=1)
+        
+        async def execute_with_retry():
+            nonlocal retries
             while True:
                 try:
-                    result = await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
-                    return result
-
+                    return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
                 except RequestException as e:
                     status = getattr(e, "response", None)
                     status_code = getattr(status, "status_code", None) if status else None
@@ -155,6 +157,12 @@ class BskyClient:
                         retries += 1
                     else:
                         raise
+
+        if settings.disable_internal_rate_limits:
+            return await execute_with_retry()
+        
+        async with self._semaphore:
+            return await execute_with_retry()
 
     # ── Public API wrappers ────────────────────────────────────────────────────
     # These are thin passthroughs — fetch.py composes them into higher-level ops.

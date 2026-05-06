@@ -169,15 +169,24 @@ async def run_sync(
                 profile_map[p.did] = p
 
         all_dids = list(profile_map.keys())
+        # Add owner to the analysis pool so the user's own stats are calculated
+        if owner_did not in all_dids:
+            all_dids.append(owner_did)
+            profile_map[owner_did] = my_profile
+
         total = len(all_dids)
 
         # ── 2.5 Hydrate profiles with social counts ───────────────────────────
-        await emit("phase", message=f"Hydrating {total} profiles…")
-        detailed_profiles = await fetch_profiles_detailed(client, all_dids)
-        logger.info(f"Hydrated {len(detailed_profiles)} out of {len(all_dids)} profiles.")
-        
-        for dp in detailed_profiles:
-            profile_map[dp.did] = dp
+        BATCH_SIZE_HYDRATE = 25
+        for i in range(0, total, BATCH_SIZE_HYDRATE):
+            batch = all_dids[i : i + BATCH_SIZE_HYDRATE]
+            detailed_batch = await fetch_profiles_detailed(client, batch)
+            for dp in detailed_batch:
+                profile_map[dp.did] = dp
+            
+            current = min(i + BATCH_SIZE_HYDRATE, total)
+            pct = int(current / total * 100)
+            await emit("progress", message=f"Hydrating profiles ({current}/{total})…", pct=pct)
 
         # ── 2.5.1 Fast pass: Update relationship status and promote stubs ─────
         # We do this before analysis so the UI reflects the new graph immediately.
@@ -189,20 +198,22 @@ async def run_sync(
             tasks = []
             for did in batch:
                 p = profile_map[did]
-                i_follow = did in follows_dids
-                they_follow = did in followers_dids
+                is_self = did == owner_did
+                i_follow = did in follows_dids if not is_self else False
+                they_follow = did in followers_dids if not is_self else False
                 tasks.append(upsert_profile_relationship(saved_account, {
                     "did": did,
-                    "handle": p.handle,
+                    "handle": getattr(p, 'handle', saved_account.handle),
                     "i_follow_them": i_follow,
                     "they_follow_me": they_follow,
-                    "crawl_tier": 1,  # Promote from stub to standard
+                    "crawl_tier": 2 if is_self else 1,  # Owner is Tier 2 (High Priority)
                     "is_one_sided_follow": i_follow and not they_follow,
                     "is_follower_only": they_follow and not i_follow,
                 }))
             await asyncio.gather(*tasks)
             if i % 250 == 0:
-                await emit("phase", message=f"Updating relationships ({i}/{total})…")
+                pct = int(min(i + BATCH_SIZE, total) / total * 100)
+                await emit("progress", message=f"Updating relationships ({i}/{total})…", pct=pct)
 
         # ── 2.6 Filter stale accounts to avoid wasteful re-analysis ───────────
         # Skip accounts that were analyzed recently (within their tier's threshold)

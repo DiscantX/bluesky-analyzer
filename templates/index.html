@@ -286,6 +286,16 @@
         <input id="set-budget" type="number" min="100" max="10240">
       </div>
     </div>
+    <div class="form-group">
+      <label class="checkbox-label">
+        <input type="checkbox" id="set-disable-rate-limits">
+        Disable Internal Rate Limits (Respect backoffs)
+      </label>
+      <p class="help-text">
+        Bypasses the 5 concurrent request limit and 100ms artificial delays. 
+        The system will still respect 429 "Too Many Requests" backoff headers from Bluesky.
+      </p>
+    </div>
 
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>

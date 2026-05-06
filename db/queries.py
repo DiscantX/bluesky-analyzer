@@ -354,14 +354,13 @@ async def _where(
     params: list[Any] = [owner_id]
 
     if search:
-        clauses.append("(p.handle LIKE ? OR p.display_name LIKE ? OR p.description LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+        clauses.append("(p.handle LIKE ? OR p.display_name LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
 
     if filter_tree:
         if isinstance(filter_tree, str):
             filter_tree = json.loads(filter_tree)
         clauses.append(f"({await _build_recursive_where_clause(filter_tree, params, owner_id)})")
-        return " AND ".join(clauses), params
 
     if flags:
         for field, value in flags.items():
@@ -441,6 +440,26 @@ async def _where(
     if after_last_post_at is not None:
         clauses.append("p.last_post_at > ?")
         params.append(after_last_post_at)
+    if before_last_analyzed_at is not None:
+        clauses.append("p.last_analyzed_at < ?")
+        params.append(before_last_analyzed_at)
+    if after_last_analyzed_at is not None:
+        clauses.append("p.last_analyzed_at > ?")
+        params.append(after_last_analyzed_at)
+    if before_last_hydrated_at is not None:
+        clauses.append("p.last_hydrated_at < ?")
+        params.append(before_last_hydrated_at)
+    if after_last_hydrated_at is not None:
+        clauses.append("p.last_hydrated_at > ?")
+        params.append(after_last_hydrated_at)
+
+    if before_first_seen_at is not None:
+        clauses.append("p.first_seen_at < ?")
+        params.append(before_first_seen_at)
+    if after_first_seen_at is not None:
+        clauses.append("p.first_seen_at > ?")
+        params.append(after_first_seen_at)
+
     if before_last_analyzed_at is not None:
         clauses.append("p.last_analyzed_at < ?")
         params.append(before_last_analyzed_at)

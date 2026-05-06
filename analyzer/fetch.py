@@ -11,6 +11,7 @@ import logging
 from typing import AsyncGenerator, Any
 
 from analyzer.client import BskyClient
+from db.models import GlobalSettings
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 async def fetch_all_follows(client: BskyClient, actor: str) -> list:
     """Fetch every account that `actor` follows, paginating automatically."""
+    settings = await GlobalSettings.get(id=1)
     results = []
     cursor = None
     while True:
@@ -27,13 +29,15 @@ async def fetch_all_follows(client: BskyClient, actor: str) -> list:
         cursor = getattr(resp, "cursor", None)
         if not cursor or not batch:
             break
-        await asyncio.sleep(0.1)   # small polite delay between pages
+        if not settings.disable_internal_rate_limits:
+            await asyncio.sleep(0.1)   # small polite delay between pages
     logger.info(f"Fetched {len(results)} follows for {actor}.")
     return results
 
 
 async def fetch_all_followers(client: BskyClient, actor: str) -> list:
     """Fetch every account that follows `actor`, paginating automatically."""
+    settings = await GlobalSettings.get(id=1)
     results = []
     cursor = None
     while True:
@@ -43,7 +47,8 @@ async def fetch_all_followers(client: BskyClient, actor: str) -> list:
         cursor = getattr(resp, "cursor", None)
         if not cursor or not batch:
             break
-        await asyncio.sleep(0.1)
+        if not settings.disable_internal_rate_limits:
+            await asyncio.sleep(0.1)
     logger.info(f"Fetched {len(results)} followers for {actor}.")
     return results
 
@@ -53,6 +58,7 @@ async def fetch_profiles_detailed(client: BskyClient, dids: list[str]) -> list:
     Fetch detailed profiles in batches of 25 (the API limit).
     This ensures we get followers_count, follows_count, and posts_count.
     """
+    settings = await GlobalSettings.get(id=1)
     results = []
     for i in range(0, len(dids), 25):
         batch_dids = dids[i:i + 25]
@@ -61,7 +67,8 @@ async def fetch_profiles_detailed(client: BskyClient, dids: list[str]) -> list:
             results.extend(resp.profiles)
         except Exception as e:
             logger.error(f"Failed to fetch profiles batch: {e}")
-        await asyncio.sleep(0.1)
+        if not settings.disable_internal_rate_limits:
+            await asyncio.sleep(0.1)
     return results
 
 
@@ -129,6 +136,7 @@ async def public_fetch_graph(
 
 async def public_fetch_profiles(dids: list[str]) -> list[dict]:
     """Fetch public profile details from AppView in batches of 25."""
+    settings = await GlobalSettings.get(id=1)
     results = []
     async with httpx.AsyncClient(timeout=30.0) as client:
         for i in range(0, len(dids), 25):
@@ -143,12 +151,14 @@ async def public_fetch_profiles(dids: list[str]) -> list[dict]:
                 results.extend(resp.json().get("profiles", []))
             except Exception as e:
                 logger.error(f"Public profile hydration failed: {e}")
-            await asyncio.sleep(0.1)
+            if not settings.disable_internal_rate_limits:
+                await asyncio.sleep(0.1)
     return results
 
 
 async def fetch_all_graph_public(actor_did: str, collection: str = "follows", on_page=None) -> list[dict]:
     """Paginate through the public graph endpoint."""
+    settings = await GlobalSettings.get(id=1)
     results = []
     cursor = None
     while True:
@@ -161,8 +171,9 @@ async def fetch_all_graph_public(actor_did: str, collection: str = "follows", on
             cursor = data.get("cursor")
             if not cursor or not batch:
                 break
-            # Polite delay for public API (approx 600 req/min)
-            await asyncio.sleep(0.1)
+            # Polite delay for public API
+            if not settings.disable_internal_rate_limits:
+                await asyncio.sleep(0.1)
         except Exception as e:
             logger.error(f"Public fetch failed for {actor_did} {collection}: {e}")
             break

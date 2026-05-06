@@ -96,25 +96,16 @@ async def needs_discovery_analysis(account: SavedAccount) -> bool:
     Returns True if there are promoted stubs (Tier 1)
     that have never been analyzed.
     """
+    # Check for accounts never analyzed OR stale discovery accounts (older than 7 days)
+    stale_threshold = datetime.now(timezone.utc) - timedelta(days=7)
     count = await AccountRelationship.filter(
         owner=account,
         crawl_tier__gt=0,
         i_follow_them=False,
-        profile__last_analyzed_at__isnull=True
-    ).count()
-    return count > 0
-
-async def needs_discovery_analysis(account: SavedAccount) -> bool:
-    """
-    Returns True if there are promoted stubs (Tier 1)
-    that have never been analyzed.
-    """
-    count = await AccountRelationship.filter(
-        owner=account,
-        crawl_tier__gt=0,
-        i_follow_them=False,
-        profile__last_analyzed_at__isnull=True
-    ).count()
+    ).filter(
+        Q(profile__last_analyzed_at__isnull=True) | 
+        Q(profile__last_analyzed_at__lt=stale_threshold)
+    ).limit(1).count()
     if count > 0:
         logger.info(f"Account {account.alias} has {count} un-analyzed discovery stubs. Prioritizing discovery analysis.")
     return count > 0
@@ -221,11 +212,15 @@ async def run_auto_discovery_analysis(account: SavedAccount):
         client = BskyClient(alias=account.alias)
         await client.login(account.handle, password)
 
-        # Find targets (Tier 1 stubs missing analysis)
+        # Find targets (Tier 1 stubs missing analysis or stale)
+        stale_threshold = datetime.now(timezone.utc) - timedelta(days=7)
         targets = await AccountRelationship.filter(
             owner=account,
             crawl_tier__gt=0,
-            profile__last_analyzed_at__isnull=True
+            i_follow_them=False
+        ).filter(
+            Q(profile__last_analyzed_at__isnull=True) | 
+            Q(profile__last_analyzed_at__lt=stale_threshold)
         ).limit(50).prefetch_related("profile")
 
         if not targets:

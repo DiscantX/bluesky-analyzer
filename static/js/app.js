@@ -521,9 +521,6 @@ async function fetchUsers(append = false, silent = false) {
   for (const key of numericFilters) {
     if (state.filters[key] != null) params.set(key, state.filters[key]);
   }
-  for (const key of dateFilters) {
-    if (state.filters[key] != null) params.set(key, state.filters[key]);
-  }
 
   try {
     const data = await api(`/api/users/${state.activeAlias}?${params}`);
@@ -911,6 +908,7 @@ async function openSettings() {
     el("set-min-conn").value   = state.settings.min_connection_threshold;
     el("set-crawl-conc").value = state.settings.crawl_concurrency;
     el("set-budget").value     = state.settings.crawl_budget_mb;
+    el("set-disable-rate-limits").checked = state.settings.disable_internal_rate_limits;
 
     el("settings-modal").classList.add("open");
   } catch (e) {
@@ -932,6 +930,7 @@ async function submitSettings() {
     min_connection_threshold:      parseInt(el("set-min-conn").value),
     crawl_concurrency:             parseInt(el("set-crawl-conc").value),
     crawl_budget_mb:               parseInt(el("set-budget").value),
+    disable_internal_rate_limits:  el("set-disable-rate-limits").checked,
   };
   try {
     await api("/api/settings/", { method: "PATCH", body: JSON.stringify(payload) });
