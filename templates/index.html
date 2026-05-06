@@ -248,21 +248,22 @@
       <button class="settings-close" onclick="closeSettings()">×</button>
     </div>
  
-    <!-- Tab bar -->
-    <div class="settings-tabs" id="settings-tabs">
-      <button class="stab active" data-tab="analysis"  onclick="switchSettingsTab('analysis')">📊 Analysis</button>
-      <button class="stab"        data-tab="sync"      onclick="switchSettingsTab('sync')">↺ Sync</button>
-      <button class="stab"        data-tab="api"       onclick="switchSettingsTab('api')">🌐 API</button>
-      <button class="stab"        data-tab="crawl"     onclick="switchSettingsTab('crawl')">✨ Crawl</button>
-      <button class="stab"        data-tab="profile"   onclick="switchSettingsTab('profile')">👤 Profile Loop</button>
-      <button class="stab"        data-tab="graph"     onclick="switchSettingsTab('graph')">🕸 Graph</button>
-    </div>
+    <div class="settings-main">
+      <!-- Sidebar Nav -->
+      <aside class="settings-sidebar" id="settings-tabs">
+        <button class="stab active" data-tab="analysis"  onclick="switchSettingsTab('analysis')">📊 Analysis</button>
+        <button class="stab"        data-tab="sync"      onclick="switchSettingsTab('sync')">↺ Sync</button>
+        <button class="stab"        data-tab="api"       onclick="switchSettingsTab('api')">🌐 API</button>
+        <button class="stab"        data-tab="crawl"     onclick="switchSettingsTab('crawl')">✨ Crawl</button>
+        <button class="stab"        data-tab="profile"   onclick="switchSettingsTab('profile')">👤 Profile Loop</button>
+        <button class="stab"        data-tab="graph"     onclick="switchSettingsTab('graph')">🕸 Graph</button>
+      </aside>
  
-    <!-- Tab panels -->
-    <div class="settings-body" id="settings-body">
+      <!-- Content Area -->
+      <section class="settings-content" id="settings-body">
  
-      <!-- ── Analysis ── -->
-      <div class="stab-panel active" data-panel="analysis">
+        <!-- ── Analysis ── -->
+        <div class="stab-panel active" data-panel="analysis">
         <div class="setting-group">
           <div class="setting-group-label">Content Thresholds</div>
  
@@ -301,8 +302,8 @@
         </div>
       </div>
  
-      <!-- ── Sync ── -->
-      <div class="stab-panel" data-panel="sync">
+        <!-- ── Sync ── -->
+        <div class="stab-panel" data-panel="sync">
         <div class="setting-group">
           <div class="setting-group-label">Sync Scheduling</div>
  
@@ -376,8 +377,8 @@
         </div>
       </div>
  
-      <!-- ── API ── -->
-      <div class="stab-panel" data-panel="api">
+        <!-- ── API ── -->
+        <div class="stab-panel" data-panel="api">
         <div class="setting-group">
           <div class="setting-group-label">Concurrency</div>
  
@@ -451,8 +452,8 @@
         </div>
       </div>
  
-      <!-- ── Crawl ── -->
-      <div class="stab-panel" data-panel="crawl">
+        <!-- ── Crawl ── -->
+        <div class="stab-panel" data-panel="crawl">
         <div class="setting-group">
           <div class="setting-group-label">Graph Expansion</div>
  
@@ -506,8 +507,8 @@
         </div>
       </div>
  
-      <!-- ── Profile Loop ── -->
-      <div class="stab-panel" data-panel="profile">
+        <!-- ── Profile Loop ── -->
+        <div class="stab-panel" data-panel="profile">
         <div class="setting-group">
           <div class="setting-group-label">Continuous Profile Analysis Loop</div>
           <div class="setting-group-desc">
@@ -562,8 +563,8 @@
         </div>
       </div>
  
-      <!-- ── Graph ── -->
-      <div class="stab-panel" data-panel="graph">
+        <!-- ── Graph ── -->
+        <div class="stab-panel" data-panel="graph">
         <div class="setting-group">
           <div class="setting-group-label">NetworkX Metric Computation</div>
  
@@ -599,7 +600,9 @@
         </div>
       </div>
  
-    </div><!-- /.settings-body -->
+      </section>
+    </div>
+    <!-- /.settings-main -->
  
     <div class="settings-footer">
       <span class="settings-footer-hint" id="settings-dirty-hint"></span>

@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 ANALYSIS_STALENESS = timedelta(days=7)
 
 # How many profiles to pull per batch
-BATCH_SIZE = 500
+BATCH_SIZE = 100
 
 # Cooperative sleep between batches (seconds) — keeps the event loop free for
 # crawl/sync tasks without starving the analysis loop

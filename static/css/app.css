@@ -818,12 +818,13 @@ body {
 ───────────────────────────────────────────────────────────────────────────── */
 
 .settings-modal-wide {
-  max-width: 760px;
+  max-width: 920px;
   width: 95vw;
   padding: 0;
   display: flex;
   flex-direction: column;
-  max-height: 88vh;
+  height: 85vh;
+  max-height: 85vh;
 }
 
 .settings-header {
@@ -853,108 +854,117 @@ body {
 }
 .settings-close:hover { color: var(--text); }
 
-/* ── Tab bar ── */
-.settings-tabs {
+.settings-main {
   display: flex;
-  gap: 0;
-  border-bottom: 1px solid var(--border);
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Sidebar Nav ── */
+.settings-sidebar {
+  width: 220px;
   background: var(--surface2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
   flex-shrink: 0;
-  overflow-x: auto;
+  padding: 1rem 0;
 }
 
 .stab {
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  padding: 0.65rem 1rem;
+  padding: 0.75rem 1.5rem;
   font-family: var(--sans);
-  font-size: 0.75rem;
+  font-size: 0.82rem;
   font-weight: 600;
   color: var(--muted);
+  text-align: left;
   cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s;
-  margin-bottom: -1px;
+  transition: all 0.15s;
+  border-left: 3px solid transparent;
 }
-.stab:hover { color: var(--text); }
+.stab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
 .stab.active {
   color: var(--accent);
-  border-bottom-color: var(--accent);
+  border-left-color: var(--accent);
   background: var(--surface);
 }
 
-/* ── Scrollable body ── */
-.settings-body {
+/* ── Content Area ── */
+.settings-content {
   flex: 1;
   overflow-y: auto;
-  padding: 0.5rem 0;
+  padding: 2rem 2.5rem;
+  background: var(--bg);
 }
 
-/* ── Tab panels ── */
-.stab-panel { display: none; padding: 0.75rem 1.4rem 1rem; }
+.stab-panel { display: none; }
 .stab-panel.active { display: block; }
 
 /* ── Setting groups ── */
-.setting-group {
-  margin-bottom: 1.5rem;
-}
+.setting-group { margin-bottom: 3rem; }
 
 .setting-group-label {
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  color: var(--muted2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  padding-bottom: 0.5rem;
-  margin-bottom: 0.25rem;
+  font-family: var(--sans);
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.75rem;
   border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
 }
 
+/* Reduce top margin for subsequent setting groups */
+.setting-group + .setting-group {
+  margin-top: 2rem; /* Reduced from default 3rem gap */
+}
 .setting-group-desc {
-  font-size: 0.72rem;
+  font-size: 0.85rem;
   color: var(--muted);
-  margin: 0.4rem 0 0.75rem;
+  margin-bottom: 1.5rem;
   line-height: 1.5;
 }
 
 /* ── Individual setting rows ── */
 .setting-row {
   display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.6rem 0;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 2rem;
+  padding: 1.25rem 0;
+  border-bottom: 1px solid var(--border);
 }
 .setting-row:last-child { border-bottom: none; }
 
 .setting-info {
   flex: 1;
-  min-width: 0;
 }
 
 .setting-name {
-  font-size: 0.8rem;
+  font-size: 0.92rem;
   font-weight: 600;
   color: var(--text);
-  margin-bottom: 0.15rem;
+  margin-bottom: 0.35rem;
 }
 
 .setting-desc {
-  font-size: 0.68rem;
+  font-size: 0.82rem;
   color: var(--muted);
-  line-height: 1.45;
+  line-height: 1.5;
+  max-width: 500px;
 }
 
 .setting-control {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.6rem;
   flex-shrink: 0;
+  margin-top: 0.25rem;
 }
 
 .setting-input {
-  width: 80px;
+  width: 90px;
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -964,27 +974,51 @@ body {
   font-size: 0.82rem;
   text-align: right;
   outline: none;
-  transition: border-color 0.15s;
+  transition: all 0.15s;
 }
-.setting-input:focus { border-color: var(--accent); }
+/* Custom styling for number input spin buttons */
+.setting-input[type="number"] {
+  -moz-appearance: textfield; /* Firefox */
+  padding-right: 2.2rem; /* Make space for the custom spin buttons */
+  position: relative; /* For absolute positioning of spin buttons */
+}
 
-/* Wide input for fields that need more digits (MB budget, node counts) */
-.setting-input.wide { width: 110px; }
+.setting-input[type="number"]::-webkit-inner-spin-button,
+.setting-input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+  width: 1.8rem; /* Width of the spin button area */
+  height: 100%;
+  background-color: var(--surface2); /* Match input background */
+  color: var(--muted); /* Arrow color */
+  cursor: pointer;
+  border-left: 1px solid var(--border);
+  box-sizing: border-box;
+  transition: background-color 0.15s, color 0.15s;
+  position: absolute;
+  right: 0;
+  top: 0;
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+}
+.setting-input:focus { border-color: var(--accent); background: var(--surface); }
+
+.setting-input.wide { width: 120px; }
 
 .setting-unit {
   font-family: var(--mono);
-  font-size: 0.65rem;
+  font-size: 0.72rem;
   color: var(--muted2);
   white-space: nowrap;
-  min-width: 36px;
+  width: 45px;
 }
 
 /* ── Footer ── */
 .settings-footer {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.85rem 1.4rem;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
