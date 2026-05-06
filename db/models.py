@@ -85,11 +85,14 @@ class Profile(Model):
     did = fields.CharField(max_length=256, unique=True)
     handle = fields.CharField(max_length=128)
     display_name = fields.CharField(max_length=256, null=True)
+    description = fields.TextField(null=True)
     avatar_url = fields.TextField(null=True)
+    banner_url = fields.TextField(null=True)
     profile_url = fields.TextField(null=True)
     followers_count = fields.IntField(default=0)
     follows_count = fields.IntField(default=0)
     posts_count = fields.IntField(default=0)
+    account_created_at = fields.DatetimeField(null=True)
     last_post_at = fields.DatetimeField(null=True)
     days_since_post = fields.IntField(null=True)
     sampled_post_count = fields.IntField(default=0)   # how many posts we sampled
@@ -101,6 +104,7 @@ class Profile(Model):
     last_hydrated_at = fields.DatetimeField(null=True)
     last_analyzed_at = fields.DatetimeField(null=True)
     first_seen_at = fields.DatetimeField(auto_now_add=True)
+    labels = fields.TextField(null=True) # Stored as JSON string
 
     class Meta:
         table = "profiles"

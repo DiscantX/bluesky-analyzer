@@ -354,8 +354,8 @@ async def _where(
     params: list[Any] = [owner_id]
 
     if search:
-        clauses.append("(p.handle LIKE ? OR p.display_name LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%"])
+        clauses.append("(p.handle LIKE ? OR p.display_name LIKE ? OR p.description LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
     if filter_tree:
         if isinstance(filter_tree, str):
@@ -441,24 +441,6 @@ async def _where(
     if after_last_post_at is not None:
         clauses.append("p.last_post_at > ?")
         params.append(after_last_post_at)
-    if before_last_analyzed_at is not None:
-        clauses.append("p.last_analyzed_at < ?")
-        params.append(before_last_analyzed_at)
-    if after_last_analyzed_at is not None:
-        clauses.append("p.last_analyzed_at > ?")
-        params.append(after_last_analyzed_at)
-    if before_last_hydrated_at is not None:
-        clauses.append("p.last_hydrated_at < ?")
-        params.append(before_last_hydrated_at)
-    if after_last_hydrated_at is not None:
-        clauses.append("p.last_hydrated_at > ?")
-        params.append(after_last_hydrated_at)
-    if before_last_crawled_at is not None:
-        clauses.append("r.last_crawled_at < ?")
-        params.append(before_last_crawled_at)
-    if after_last_crawled_at is not None:
-        clauses.append("r.last_crawled_at > ?")
-        params.append(after_last_crawled_at)
     if before_last_analyzed_at is not None:
         clauses.append("p.last_analyzed_at < ?")
         params.append(before_last_analyzed_at)

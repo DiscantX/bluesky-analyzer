@@ -12,6 +12,7 @@ from tortoise.expressions import Q
 from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem, GlobalSettings
 from db.profile_store import upsert_profile_relationship
 from analyzer.fetch import public_fetch_graph, public_fetch_profiles
+from analyzer.analyze import parse_dt
 from analyzer.metrics import run_graph_analysis
 
 logger = logging.getLogger(__name__)
@@ -173,19 +174,19 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 # Determine edges based on direction
                 if direction == "follows":
                     # We are looking at who 'user' follows
-                    edge_pairs = [(user.did, target_did) for target_did in page_dids]
+                    edge_data = [(user.did, f["did"], f.get("createdAt")) for f in batch]
                     target_filter = {"followee_did__in": page_dids}
                 else:
                     # We are looking at who follows 'user'
-                    edge_pairs = [(target_did, user.did) for target_did in page_dids]
+                    edge_data = [(f["did"], user.did, f.get("createdAt")) for f in batch]
                     target_filter = {"follower_did__in": page_dids}
                 
                 all_edges = await FollowEdge.filter(**target_filter).all()
                 existing_edges = {(e.follower_did, e.followee_did) for e in all_edges}
                 
                 new_edges = [
-                    FollowEdge(follower_did=s, followee_did=t)
-                    for s, t in edge_pairs
+                    FollowEdge(follower_did=s, followee_did=t, discovered_at=parse_dt(ts) or _now())
+                    for s, t, ts in edge_data
                     if (s, t) not in existing_edges
                 ]
 
@@ -410,6 +411,10 @@ async def hydrate_stubs(owner: SavedAccount, dids: list[str], semaphore: asyncio
         shared_profile.followers_count = _profile_value(profile, "followers_count", "followersCount")
         shared_profile.follows_count = _profile_value(profile, "follows_count", "followsCount")
         shared_profile.posts_count = _profile_value(profile, "posts_count", "postsCount")
+        shared_profile.description = profile.get("description")
+        shared_profile.banner_url = profile.get("banner")
+        shared_profile.account_created_at = parse_dt(profile.get("createdAt"))
+        shared_profile.labels = json.dumps([l.get("val") for l in profile.get("labels", [])]) if profile.get("labels") else None
         shared_profile.last_hydrated_at = hydrated_at
         await shared_profile.save()
         user.crawl_pending_fields = json.dumps(["feed_sample", "relationship_flags"])

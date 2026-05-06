@@ -10,11 +10,14 @@ PROFILE_FIELDS = {
     "did",
     "handle",
     "display_name",
+    "description",
     "avatar_url",
+    "banner_url",
     "profile_url",
     "followers_count",
     "follows_count",
     "posts_count",
+    "account_created_at",
     "last_post_at",
     "days_since_post",
     "sampled_post_count",
@@ -24,6 +27,7 @@ PROFILE_FIELDS = {
     "is_inactive",
     "is_repost_heavy",
     "last_analyzed_at",
+    "labels",
 }
 
 RELATIONSHIP_FIELDS = {

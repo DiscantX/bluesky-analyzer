@@ -6,6 +6,7 @@ Pure functions — no I/O, no DB access. Easy to unit test.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -170,6 +171,10 @@ def build_tracked_user_data(
         "followers_count": _get(profile, "followers_count", "followersCount"),
         "follows_count": _get(profile, "follows_count", "followsCount"),
         "posts_count": _get(profile, "posts_count", "postsCount"),
+        "description": getattr(profile, "description", None),
+        "banner_url": getattr(profile, "banner", None),
+        "account_created_at": parse_dt(getattr(profile, "created_at", getattr(profile, "createdAt", None))),
+        "labels": json.dumps([l.val for l in profile.labels]) if getattr(profile, "labels", None) else None,
         "i_follow_them": i_follow_them,
         "they_follow_me": they_follow_me,
         "crawl_tier": 1,
