@@ -10,6 +10,7 @@ from analyzer.crawl import crawl_step, refresh_priorities
 from analyzer.fetch import fetch_feeds_concurrent
 from analyzer.analyze import build_tracked_user_data
 from analyzer.manager import bus, is_operation_running, running_tasks, task_key
+from analyzer.profile_analysis_loop import start_profile_analysis_loop
 from analyzer.sync import run_sync
 from db.models import CrawlRun, SavedAccount, AccountRelationship, GlobalSettings
 from db.profile_store import upsert_profile_relationship
@@ -48,23 +49,6 @@ def schedule_crawl(account: SavedAccount) -> bool:
     running_tasks[key] = asyncio.create_task(run_auto_crawl(account))
     return True
 
-def schedule_discovery_analysis(account: SavedAccount) -> bool:
-    """Schedule a discovery analysis for promoted stubs."""
-    key = task_key(account.alias, "discovery")
-    if is_operation_running(account.alias, "discovery"):
-        return False
-    bus.clear(account.alias, "discovery")
-    running_tasks[key] = asyncio.create_task(run_auto_discovery_analysis(account))
-    return True
-
-def schedule_continuous_profile_analysis(account: SavedAccount) -> bool:
-    """Schedule continuous profile analysis."""
-    key = task_key(account.alias, "continuous_profile_analysis")
-    if is_operation_running(account.alias, "continuous_profile_analysis"):
-        return False
-    bus.clear(account.alias, "continuous_profile_analysis")
-    running_tasks[key] = asyncio.create_task(run_continuous_profile_analysis(account))
-    return True
 
 async def promote_stubs(account: SavedAccount):
     """
@@ -72,7 +56,6 @@ async def promote_stubs(account: SavedAccount):
     interest thresholds (high connections or influence).
     """
     settings = await GlobalSettings.get(id=1)
-    # Promote based on subgraph density or FlowRank prestige
     promotable = await AccountRelationship.filter(
         owner=account,
         crawl_tier=0
@@ -80,12 +63,13 @@ async def promote_stubs(account: SavedAccount):
         Q(in_subgraph_degree__gte=settings.min_connection_threshold) |
         Q(flowrank_score__gt=0.0001)
     ).all()
-    
+
     if promotable:
         logger.info(f"Promoting {len(promotable)} stubs to Tier 1 for {account.alias}")
         for rel in promotable:
             rel.crawl_tier = 1
             await rel.save(update_fields=["crawl_tier"])
+
 
 async def needs_urgent_sync(account: SavedAccount) -> bool:
     """
@@ -101,93 +85,47 @@ async def needs_urgent_sync(account: SavedAccount) -> bool:
         logger.info(f"Account {account.alias} has {count} un-analyzed follows. Prioritizing sync.")
     return count > 0
 
-async def needs_discovery_analysis(account: SavedAccount) -> bool:
-    """
-    Returns True if there are promoted stubs (Tier 1)
-    that have never been analyzed.
-    """
-    # Check for accounts never analyzed OR stale discovery accounts (older than 7 days)
-    stale_threshold = datetime.now(timezone.utc) - timedelta(days=7)
-    count = await AccountRelationship.filter(
-        owner=account,
-        crawl_tier__gt=0,
-        i_follow_them=False,
-    ).filter(
-        Q(profile__last_analyzed_at__isnull=True) | 
-        Q(profile__last_analyzed_at__lt=stale_threshold)
-    ).limit(1).count()
-    if count > 0:
-        logger.info(f"Account {account.alias} has {count} un-analyzed discovery stubs. Prioritizing discovery analysis.")
-    return count > 0
-
-
-async def needs_continuous_profile_analysis(account: SavedAccount) -> bool:
-    """
-    Returns True if there are tracked accounts (not owner, not direct follows/followers)
-    that need profile analysis due to staleness or missing analysis.
-    """
-    stale_threshold = datetime.now(timezone.utc) - PROFILE_ANALYSIS_STALENESS
-    # We want to analyze profiles that are not the owner, not direct follows/followers (as they are covered by sync),
-    # and are hydrated but either unanalyzed or stale.
-    count = await AccountRelationship.filter(
-        owner=account,
-        i_follow_them=False, # Exclude direct follows (covered by sync)
-        they_follow_me=False, # Exclude direct followers (covered by sync)
-    ).exclude(did=account.did).filter(
-        profile__last_hydrated_at__isnull=False
-    ).filter(
-        Q(profile__last_analyzed_at__isnull=True) |
-        Q(profile__last_analyzed_at__lt=stale_threshold)
-    ).limit(1).count() # Just check if any exist
-    if count > 0:
-        logger.info(f"Account {account.alias} has {count} tracked accounts needing continuous profile analysis.")
-    return count > 0
 
 async def worker_loop():
     """Periodically schedules sync and crawl work for all accounts."""
     logger.info("Background worker loop started.")
     await asyncio.sleep(2)
 
+    # ── Startup: launch one persistent analysis loop per account ──────────────
     accounts = await SavedAccount.all()
     for account in accounts:
         logger.info(f"Refreshing crawl priorities for {account.alias}...")
         await refresh_priorities(account)
+
+        # Start the persistent profile analysis loop — it runs forever alongside
+        # sync and crawl, independently selecting and analyzing stale profiles.
+        start_profile_analysis_loop(account)
+
         if account.auto_sync_enabled:
-            # Start sync; it will automatically trigger a crawl upon completion.
             schedule_sync(account)
         elif account.auto_crawl_enabled and account.last_synced_at:
-            # Only start crawl if sync is not enabled for this account.
-            # (If sync is enabled, we wait for it to finish first)
-            schedule_crawl(account) 
-        
-        if account.auto_crawl_enabled:
-            # Schedule continuous profile analysis on startup if enabled
-            schedule_continuous_profile_analysis(account)
+            schedule_crawl(account)
 
+    # ── Main sweep loop ───────────────────────────────────────────────────────
     while True:
         try:
             accounts = await SavedAccount.all()
             now = datetime.now(timezone.utc)
 
             for account in accounts:
-                # 1. Expand the Tier 1 candidate pool
+                # Ensure the persistent analysis loop is alive (restarts if it
+                # crashed or was never started for a newly added account).
+                start_profile_analysis_loop(account)
+
+                # Expand the Tier 1 candidate pool
                 await promote_stubs(account)
 
                 if account.auto_sync_enabled:
-                    # Urgency check: stale sync OR un-analyzed direct follows
                     stale = not account.last_synced_at or (now - account.last_synced_at) > SYNC_STALENESS
                     if stale or await needs_urgent_sync(account):
                         schedule_sync(account)
 
-                if not is_operation_running(account.alias, "sync") and await needs_discovery_analysis(account):
-                    schedule_discovery_analysis(account) 
-                
-                # Continuous profile analysis for general tracked users
-                if account.auto_crawl_enabled and not is_operation_running(account.alias, "sync") and not is_operation_running(account.alias, "discovery") and await needs_continuous_profile_analysis(account):
-                    schedule_continuous_profile_analysis(account)
-
                 if account.auto_crawl_enabled and account.last_synced_at:
-                    # Only crawl if a sync isn't urgently needed or currently running
                     if not is_operation_running(account.alias, "sync"):
                         schedule_crawl(account)
 
@@ -207,13 +145,12 @@ async def run_auto_sync(account: SavedAccount):
         await client.login(account.handle, password)
         await run_sync(account, client, account.alias)
 
-        # Save session in case it was refreshed during the long sync
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, client._save_session)
 
         account = await SavedAccount.get(id=account.id)
         if account.auto_crawl_enabled:
-            await asyncio.sleep(2) # Give the user a moment to see the Sync Complete message
+            await asyncio.sleep(2)
             schedule_crawl(account)
     except asyncio.CancelledError:
         logger.info(f"Auto-sync cancelled for {account.alias}.")
@@ -250,146 +187,3 @@ async def run_auto_crawl(account: SavedAccount):
         await bus.emit(account.alias, {"kind": "error", "operation": "crawl", "message": str(e)})
     finally:
         running_tasks.pop(task_key(account.alias, "crawl"), None)
-
-async def run_continuous_profile_analysis(account: SavedAccount):
-    """
-    Continuously fetches feeds and activity metrics for tracked users
-    that are not direct follows/followers and need re-analysis.
-    """
-    try:
-        from analyzer.manager import current_alias_var, current_op_var
-        current_alias_var.set(account.alias)
-        current_op_var.set("continuous_profile_analysis")
-
-        password = config.get_password(account.alias)
-        if not password:
-            return
-
-        client = BskyClient(alias=account.alias)
-        await client.login(account.handle, password)
-
-        stale_threshold = datetime.now(timezone.utc) - PROFILE_ANALYSIS_STALENESS
-        # Target accounts that are not the owner, not direct follows/followers,
-        # and are hydrated but either unanalyzed or stale.
-        targets = await AccountRelationship.filter(
-            owner=account,
-            i_follow_them=False,
-            they_follow_me=False,
-        ).exclude(did=account.did).filter(
-            profile__last_hydrated_at__isnull=False
-        ).filter(
-            Q(profile__last_analyzed_at__isnull=True) |
-            Q(profile__last_analyzed_at__lt=stale_threshold)
-        ).limit(50).prefetch_related("profile") # Limit to a batch to avoid long-running tasks
-
-        if not targets:
-            logger.info(f"No profiles needing continuous analysis for {account.alias}.")
-            return
-
-        logger.info(f"Starting continuous profile analysis for {len(targets)} profiles for {account.alias}.")
-
-        dids = [t.did for t in targets]
-        target_map = {t.did: t for t in targets}
-        settings = await GlobalSettings.get(id=1)
-
-        completed_count = 0
-        total_targets = len(targets)
-
-        async for did, feed_items in fetch_feeds_concurrent(
-            client, dids, limit_per_actor=settings.feed_sample_size
-        ):
-            rel = target_map[did]
-            profile = await rel.profile
-            data = build_tracked_user_data(
-                profile=profile,
-                feed_items=feed_items,
-                owner_did=account.did,
-                i_follow_them=rel.i_follow_them,
-                they_follow_me=rel.they_follow_me,
-                inactive_days=settings.inactivity_threshold_days,
-                repost_threshold=settings.repost_ratio_threshold
-            )
-            data["last_analyzed_at"] = datetime.now(timezone.utc)
-            await upsert_profile_relationship(account, data)
-            completed_count += 1
-            pct = int((completed_count / total_targets) * 100)
-            message = f"Continuous profile analysis: {completed_count}/{total_targets} profiles analyzed ({pct}%)"
-            await bus.emit(account.alias, {"kind": "progress", "operation": "continuous_profile_analysis", "message": message, "pct": pct})
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, client._save_session)
-
-        logger.info(f"Completed continuous profile analysis for {account.alias}.")
-        await bus.emit(account.alias, {"kind": "done", "operation": "continuous_profile_analysis", "message": "Continuous profile analysis complete!"})
-
-    except asyncio.CancelledError:
-        logger.info(f"Continuous profile analysis cancelled for {account.alias}.")
-        raise
-    except Exception as e:
-        logger.error(f"Continuous profile analysis failed for {account.alias}: {e}")
-        await bus.emit(account.alias, {"kind": "error", "operation": "continuous_profile_analysis", "message": str(e)})
-    finally:
-        running_tasks.pop(task_key(account.alias, "continuous_profile_analysis"), None)
-
-async def run_auto_discovery_analysis(account: SavedAccount):
-    """
-    Fetches feeds and activity metrics for promoted stubs.
-    Targets accounts that are Tier 1 but NOT follows/followers.
-    """
-    try:
-        from analyzer.manager import current_alias_var, current_op_var
-        current_alias_var.set(account.alias)
-        current_op_var.set("discovery")
-
-        password = config.get_password(account.alias)
-        if not password:
-            return
-
-        client = BskyClient(alias=account.alias)
-        await client.login(account.handle, password)
-
-        # Find targets (Tier 1 stubs missing analysis or stale)
-        stale_threshold = datetime.now(timezone.utc) - timedelta(days=7)
-        targets = await AccountRelationship.filter(
-            owner=account,
-            crawl_tier__gt=0,
-            i_follow_them=False
-        ).filter(
-            Q(profile__last_analyzed_at__isnull=True) | 
-            Q(profile__last_analyzed_at__lt=stale_threshold)
-        ).limit(50).prefetch_related("profile")
-
-        if not targets:
-            return
-
-        dids = [t.did for t in targets]
-        target_map = {t.did: t for t in targets}
-        settings = await GlobalSettings.get(id=1)
-
-        async for did, feed_items in fetch_feeds_concurrent(
-            client, dids, limit_per_actor=settings.feed_sample_size
-        ):
-            rel = target_map[did]
-            profile = await rel.profile
-            data = build_tracked_user_data(
-                profile=profile,
-                feed_items=feed_items,
-                owner_did=account.did,
-                i_follow_them=rel.i_follow_them,
-                they_follow_me=rel.they_follow_me,
-                inactive_days=settings.inactivity_threshold_days,
-                repost_threshold=settings.repost_ratio_threshold
-            )
-            data["last_analyzed_at"] = datetime.now(timezone.utc)
-            await upsert_profile_relationship(account, data)
-            
-        # Save session in case it was refreshed during discovery
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, client._save_session)
-
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:
-        logger.error(f"Discovery analysis failed for {account.alias}: {e}")
-    finally:
-        running_tasks.pop(task_key(account.alias, "discovery"), None)
