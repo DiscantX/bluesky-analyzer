@@ -181,9 +181,26 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
         req_rate = global_req_tracker.get_rate()
         found_rate = global_found_tracker.get_rate()
 
+        # Fetch overall account stats for the UI
+        from db.queries import get_stats
+        account_stats = await get_stats(owner.id)
+
+        # Pass all relevant crawl_run stats to the emit function
+        crawl_stats = {
+            "candidates_queued": crawl_run.candidates_queued,
+            "candidates_completed": crawl_run.candidates_completed,
+            "candidates_failed": crawl_run.candidates_failed,
+            "candidates_skipped": crawl_run.candidates_skipped,
+            "discovered_count": crawl_run.discovered_count,
+            "request_count": crawl_run.request_count,
+            "last_message": crawl_run.last_message,
+            "batch_size": crawl_run.batch_size,
+            "status": crawl_run.status,
+        }
+
         if on_progress:
             try:
-                await on_progress(message, pct, req_rate=req_rate, found_rate=found_rate)
+                await on_progress(message, pct, req_rate=req_rate, found_rate=found_rate, crawl_stats=crawl_stats, account_stats=account_stats)
             except TypeError:
                 await on_progress(message, pct)
 
@@ -393,19 +410,6 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             await item.save(update_fields=["status", "cursor", "completed_at"])
             await asyncio.sleep(0.001) # Yield to event loop
             crawl_run.candidates_completed += 1
-            
-            # Pass all relevant crawl_run stats to the emit function
-            crawl_stats = {
-                "candidates_queued": crawl_run.candidates_queued,
-                "candidates_completed": crawl_run.candidates_completed,
-                "candidates_failed": crawl_run.candidates_failed,
-                "candidates_skipped": crawl_run.candidates_skipped,
-                "discovered_count": crawl_run.discovered_count,
-                "request_count": crawl_run.request_count,
-                "last_message": crawl_run.last_message,
-                "batch_size": crawl_run.batch_size,
-                "status": crawl_run.status,
-            }
             await crawl_run.save(update_fields=["candidates_completed", "request_count", "discovered_count", "last_message"])
    # Process all candidates concurrently using a shared HTTP client
     async with httpx.AsyncClient(timeout=30.0) as public_client:
