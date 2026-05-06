@@ -1026,8 +1026,8 @@ async function openSettings() {
     const modal = el("settings-modal");
     if (modal) modal.classList.add("open");
   } catch (e) {
-    console.error("openSettings failed:", e);
-    toast("Can't open settings", "error");
+    logError("openSettings failed", e);
+    toast("Failed to load settings: " + e.message, "error");
   }
 }
  
@@ -1043,10 +1043,11 @@ function _markDirty(key) {
   input.classList.toggle("dirty", isDirty);
  
   const anyDirty = SETTINGS_KEYS.some(k => {
-    const el = document.getElementById(`set-${k}`);
-    return el && el.classList.contains("dirty");
+    const inputEl = document.getElementById(`set-${k}`);
+    return inputEl && inputEl.classList.contains("dirty");
   });
-  el("settings-dirty-hint").textContent = anyDirty ? "Unsaved changes" : "";
+  const hint = el("settings-dirty-hint");
+  if (hint) hint.textContent = anyDirty ? "Unsaved changes" : "";
 }
  
 function closeSettings() {

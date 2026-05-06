@@ -187,13 +187,13 @@ def ensure_sqlite_compat_columns() -> None:
             conn.execute("INSERT INTO global_settings (id) VALUES (1)")
 
         cleanup_updates = [
-            "worker_sweep_interval_seconds = 300 WHERE worker_sweep_interval_seconds < 30",
-            "inactivity_threshold_days = 90 WHERE inactivity_threshold_days = 0",
-            "feed_sample_size = 100 WHERE feed_sample_size = 0",
-            "sync_staleness_hours = 12 WHERE sync_staleness_hours = 0",
-            "feed_fetch_concurrency = 15 WHERE feed_fetch_concurrency = 0",
-            "crawl_concurrency = 3 WHERE crawl_concurrency = 0",
-            "profile_analysis_batch_size = 30 WHERE profile_analysis_batch_size = 0",
+            "worker_sweep_interval_seconds = 300 WHERE worker_sweep_interval_seconds < 30 OR worker_sweep_interval_seconds IS NULL",
+            "inactivity_threshold_days = 90 WHERE inactivity_threshold_days = 0 OR inactivity_threshold_days IS NULL",
+            "feed_sample_size = 100 WHERE feed_sample_size = 0 OR feed_sample_size IS NULL",
+            "sync_staleness_hours = 12 WHERE sync_staleness_hours = 0 OR sync_staleness_hours IS NULL",
+            "feed_fetch_concurrency = 15 WHERE feed_fetch_concurrency = 0 OR feed_fetch_concurrency IS NULL",
+            "crawl_concurrency = 3 WHERE crawl_concurrency = 0 OR crawl_concurrency IS NULL",
+            "profile_analysis_batch_size = 30 WHERE profile_analysis_batch_size = 0 OR profile_analysis_batch_size IS NULL",
         ]
         for update in cleanup_updates:
             conn.execute(f"UPDATE global_settings SET {update}")
