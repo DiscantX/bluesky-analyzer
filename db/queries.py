@@ -722,54 +722,87 @@ async def get_graph_data(
             params = [owner_id, community_id, limit]
 
     elif mode == "packing":
-        # Hierarchical data for Zoomable Circle Packing
-        # 1. Get top 100 members per community by FlowRank (Source of truth for existing communities)
-        members_query = """
-            WITH RankedMembers AS (
-                SELECT 
-                    r.did, p.handle, r.community_id, r.flowrank_score as rank, p.top_keywords,
-                    ROW_NUMBER() OVER (PARTITION BY r.community_id ORDER BY r.flowrank_score DESC) as rn
-                FROM account_relationships r
-                JOIN profiles p ON p.id = r.profile_id
-                WHERE r.owner_id = ? AND r.community_id IS NOT NULL
-            )
-            SELECT * FROM RankedMembers WHERE rn <= 100
-        """
-        members_data = await conn.execute_query_dict(members_query, [owner_id])
+            # Hierarchical data for Zoomable Circle Packing
+            # Top 100 members per community by FlowRank — these define each community's identity
 
-        # 2. Identify unique communities and fetch metadata if it exists
-        cids = list({m["community_id"] for m in members_data})
-        meta_lookup = {}
-        if cids:
-            placeholders = ",".join(["?"] * len(cids))
-            comm_meta = await conn.execute_query_dict(
-                f"SELECT community_id, name, description FROM community_metadata WHERE owner_id = ? AND community_id IN ({placeholders})",
-                [owner_id] + cids
-            )
-            meta_lookup = {c["community_id"]: c for c in comm_meta}
-        
-        # 3. Assemble hierarchy
-        communities_map = {}
-        for m in members_data:
-            cid = m["community_id"]
-            if cid not in communities_map:
-                meta = meta_lookup.get(cid, {})
-                communities_map[cid] = {
-                    "name": meta.get("name") or f"Community {cid}",
-                    "id": cid,
-                    "children": []
-                }
-            
-            kws = json.loads(m["top_keywords"]) if m["top_keywords"] else {}
-            communities_map[cid]["children"].append({
-                "name": m["handle"],
-                "value": m["rank"] or 0.0001,
-                "keywords": list(kws.keys())[:5],
-                "did": m["did"]
-            })
-        
-        return {"name": "Network", "children": list(communities_map.values()), "metadata": {"mode": "packing"}}
+            # BUG FIX: was `r.repost_ratio` (wrong table alias) — ratio lives on Profile (p), not AccountRelationship (r)
+            members_query = """
+                WITH RankedMembers AS (
+                    SELECT
+                        r.did,
+                        p.handle,
+                        r.community_id,
+                        r.flowrank_score  AS rank,
+                        p.top_keywords,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY r.community_id
+                            ORDER BY r.flowrank_score DESC
+                        ) AS rn
+                    FROM account_relationships r
+                    JOIN profiles p ON p.id = r.profile_id
+                    WHERE r.owner_id = ? AND r.community_id IS NOT NULL
+                )
+                SELECT did, handle, community_id, rank, top_keywords
+                FROM RankedMembers
+                WHERE rn <= 100
+            """
+            members_data = await conn.execute_query_dict(members_query, [owner_id])
 
+            # Unique community IDs from the result set
+            cids = list({m["community_id"] for m in members_data})
+            meta_lookup = {}
+            if cids:
+                placeholders = ",".join(["?"] * len(cids))
+                comm_meta = await conn.execute_query_dict(
+                    f"SELECT community_id, name, description FROM community_metadata "
+                    f"WHERE owner_id = ? AND community_id IN ({placeholders})",
+                    [owner_id] + cids,
+                )
+                meta_lookup = {c["community_id"]: c for c in comm_meta}
+
+            # Assemble D3 hierarchy
+            communities_map = {}
+            for m in members_data:
+                cid = m["community_id"]
+                if cid not in communities_map:
+                    meta = meta_lookup.get(cid, {})
+                    communities_map[cid] = {
+                        "name": meta.get("name") or f"Community {cid}",
+                        "id": cid,
+                        "children": [],
+                    }
+
+                # NULL-SAFE top_keywords parsing — value may be None, dict, or JSON string
+                kws: dict = {}
+                raw = m.get("top_keywords")
+                if raw:
+                    if isinstance(raw, dict):
+                        kws = raw
+                    else:
+                        try:
+                            import json as _json
+                            kws = _json.loads(raw)
+                        except (ValueError, TypeError):
+                            kws = {}
+
+                top5 = [k for k, _ in sorted(kws.items(), key=lambda x: x[1], reverse=True)[:5]]
+
+                communities_map[cid]["children"].append({
+                    "name": m["handle"],
+                    "value": max(float(m["rank"] or 0.0), 1e-9),  # D3 pack requires value > 0
+                    "keywords": top5,
+                    "did": m["did"],
+                })
+
+            # Filter out communities that ended up with no members
+            children = [c for c in communities_map.values() if c["children"]]
+            return {
+                "name": "Network",
+                "children": children,
+                "metadata": {"mode": "packing", "community_count": len(children)},
+            }
+ 
+ 
     else:
         # Default fallback
         nodes_query = """

@@ -1,32 +1,121 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Circle Packing: Community Topics - {{ alias }}</title>
+    <title>Circle Packing: Community Topics — {{ alias }}</title>
     <link rel="stylesheet" href="/static/css/app.css">
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
-        body { background: #0c0e14; color: #f8fafc; margin: 0; overflow: hidden; display: block; }
-        circle { cursor: pointer; stroke-width: 1.5px; transition: stroke 0.2s; }
-        circle:hover { stroke: #fff !important; }
-        .label { font: 11px sans-serif; text-anchor: middle; fill: #fff; pointer-events: none; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
-        .keyword { font-size: 8px; fill: #94a3b8; font-weight: normal; }
-        .controls { position: fixed; top: 20px; left: 20px; z-index: 10; background: rgba(30, 41, 59, 0.8); padding: 15px; border-radius: 8px; border: 1px solid #334155; }
+        body {
+            background: #0c0e14;
+            color: #f8fafc;
+            margin: 0;
+            overflow: hidden;
+            display: block;
+        }
+
+        #pack-svg {
+            display: block;
+        }
+
+        /* ── Floating controls ── */
+        .pack-controls {
+            position: fixed;
+            top: 1rem;
+            left: 1rem;
+            z-index: 10;
+            background: rgba(19, 22, 31, 0.92);
+            padding: 1rem 1.25rem;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            backdrop-filter: blur(8px);
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-width: 220px;
+        }
+
+        .pack-controls h2 {
+            margin: 0 0 0.25rem;
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: -0.01em;
+        }
+
+        .pack-hint {
+            font-family: var(--mono);
+            font-size: 0.68rem;
+            color: var(--muted);
+            line-height: 1.55;
+        }
+
+        .pack-hint b {
+            color: var(--accent2);
+        }
+
+        /* ── Legend ── */
+        .pack-legend {
+            position: fixed;
+            bottom: 1rem;
+            left: 1rem;
+            z-index: 10;
+            background: rgba(19, 22, 31, 0.85);
+            padding: 0.6rem 0.9rem;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            font-family: var(--mono);
+            font-size: 0.67rem;
+            color: var(--muted);
+            backdrop-filter: blur(6px);
+        }
+
+        /* ── Tooltip ── */
+        #pack-tooltip {
+            position: fixed;
+            background: rgba(19, 22, 31, 0.95);
+            border: 1px solid var(--border2);
+            border-radius: var(--radius-sm);
+            padding: 0.55rem 0.75rem;
+            font-family: var(--mono);
+            font-size: 0.75rem;
+            pointer-events: none;
+            opacity: 0;
+            z-index: 100;
+            transition: opacity 0.1s;
+            max-width: 220px;
+        }
     </style>
 </head>
 <body>
-    <div class="controls">
-        <h2 style="margin-top:0">Community Topics</h2>
-        <p style="font-size: 11px; color: #94a3b8; max-width: 200px;">
-            Circles sized by <b>FlowRank</b>.<br>
-            Click a community to zoom in and see profile keywords.
-        </p>
-        <button onclick="location.href='/graph/{{ alias }}'" class="btn btn-ghost">Back to Force Graph</button>
-    </div>
-    <svg id="pack-svg"></svg>
 
-    <script>
-        const ALIAS = "{{ alias }}";
-    </script>
-    <script src="/static/js/pack.js"></script>
+<!-- Controls -->
+<div class="pack-controls">
+    <h2>⭕ Community Topics</h2>
+    <div class="pack-hint">
+        Circles sized by <b>FlowRank</b>.<br>
+        <b>Click</b> a community to zoom in.<br>
+        <b>Click background</b> to zoom out.<br>
+        <b>Click a profile</b> to open in Bluesky.
+    </div>
+    <a href="/graph/{{ alias }}" class="btn btn-ghost" style="margin-top:0.25rem;font-size:0.75rem;">
+        ← Network Graph
+    </a>
+</div>
+
+<!-- Legend -->
+<div class="pack-legend">
+    Inner circle size = FlowRank influence<br>
+    Colour = Community group
+</div>
+
+<!-- Tooltip -->
+<div id="pack-tooltip"></div>
+
+<!-- Canvas -->
+<svg id="pack-svg"></svg>
+
+<script>const ALIAS = "{{ alias }}";</script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="/static/js/pack.js"></script>
 </body>
 </html>
