@@ -25,7 +25,7 @@ from analyzer.analyze import build_tracked_user_data
 from analyzer.client import BskyClient
 from analyzer.fetch import fetch_feeds_concurrent
 from analyzer.manager import bus, global_found_tracker, global_req_tracker, running_tasks, task_key
-from db.models import AccountRelationship, GlobalSettings, SavedAccount
+from db.models import AccountRelationship, GlobalSettings, SavedAccount, Profile
 from db.profile_store import upsert_profile_relationship
 
 logger = logging.getLogger(__name__)
@@ -88,6 +88,7 @@ async def _analyze_batch(
 
     completed = 0
     now = datetime.now(timezone.utc)
+    updated_profiles = []
 
     async for did, feed_items in fetch_feeds_concurrent(
         client,
@@ -98,10 +99,9 @@ async def _analyze_batch(
         if not rel:
             continue
 
-        profile = await rel.profile
-
+        profile_obj = await rel.profile
         data = build_tracked_user_data(
-            profile=profile,
+            profile=profile_obj,
             feed_items=feed_items,
             owner_did=owner.did,
             i_follow_them=rel.i_follow_them,
@@ -109,10 +109,20 @@ async def _analyze_batch(
             inactive_days=settings.inactivity_threshold_days,
             repost_threshold=settings.repost_ratio_threshold,
         )
-        data["last_analyzed_at"] = now
-
-        await upsert_profile_relationship(owner, data)
+        
+        for key, value in data.items():
+            if hasattr(profile_obj, key):
+                setattr(profile_obj, key, value)
+        profile_obj.last_analyzed_at = now
+        updated_profiles.append(profile_obj)
         completed += 1
+
+    if updated_profiles:
+        await Profile.bulk_update(updated_profiles, fields=[
+            "last_post_at", "repost_count", "original_post_count", "sampled_post_count",
+            "repost_ratio", "is_inactive", "is_repost_heavy", "top_keywords", 
+            "last_analyzed_at", "days_since_post"
+        ])
 
     return completed
 

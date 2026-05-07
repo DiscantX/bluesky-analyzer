@@ -222,7 +222,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     if settings.disable_internal_rate_limits:
         concurrency = 100
     crawl_semaphore = asyncio.Semaphore(concurrency)
-    hydration_semaphore = asyncio.Semaphore(5)  # was 2 — FIX 2
+    hydration_semaphore = asyncio.Semaphore(10)  # Increased for higher throughput
 
     candidates = await claim_crawl_items(owner, batch_size)
 
@@ -384,7 +384,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 if all_discovered_dids:
                     unique_discovered = list(dict.fromkeys(all_discovered_dids))
                     # Process in chunks to avoid SQLite IN-clause limits
-                    CHUNK = 400
+                    CHUNK = 32766
                     for i in range(0, len(unique_discovered), CHUNK):
                         chunk = unique_discovered[i:i + CHUNK]
                         await _batch_update_degrees(owner, chunk, tracked_dids)

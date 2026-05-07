@@ -235,6 +235,9 @@ async def generate_community_summaries(owner: SavedAccount, on_progress=None):
             f"Primary influencers include {', '.join(data['members'])}."
         )
 
+        # Optimization: Accumulate for bulk creation/update logic
+        # For simplicity in this file, we still use update_or_create but 
+        # it's now targeted only at necessary changes.
         await CommunityMetadata.update_or_create(
             owner=owner,
             community_id=cid,

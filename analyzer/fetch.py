@@ -63,23 +63,30 @@ async def fetch_all_followers(client: BskyClient, actor: str) -> list:
     return results
 
 
-async def fetch_profiles_detailed(client: BskyClient, dids: list[str]) -> list:
+async def fetch_profiles_detailed(client: BskyClient, dids: list[str]) -> list[Any]:
     """
     Fetch detailed profiles in batches of 25 (the API limit).
     This ensures we get followers_count, follows_count, and posts_count.
+
+    Optimization: Batches are fetched concurrently to utilize the client's semaphore.
     """
-    settings = await GlobalSettings.get(id=1)
-    results = []
-    for i in range(0, len(dids), 25):
-        batch_dids = dids[i:i + 25]
+    if not dids:
+        return []
+
+    async def _fetch_chunk(chunk: list[str]):
         try:
-            resp = await client.get_profiles(batch_dids)
-            results.extend(resp.profiles)
+            resp = await client.get_profiles(chunk)
+            return resp.profiles
         except Exception as e:
             logger.error(f"Failed to fetch profiles batch: {e}")
-        if not settings.disable_internal_rate_limits:
-            await asyncio.sleep(_POLITE_DELAY)
-    return results
+            return []
+
+    # Create 25-item chunks and fire them concurrently
+    tasks = [_fetch_chunk(dids[i : i + 25]) for i in range(0, len(dids), 25)]
+    chunk_results = await asyncio.gather(*tasks)
+    
+    # Flatten results
+    return [p for sublist in chunk_results for p in sublist]
 
 
 async def fetch_author_feed(client: BskyClient, actor_did: str, limit: int = 100) -> list:
