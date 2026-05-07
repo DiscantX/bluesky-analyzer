@@ -324,6 +324,14 @@ function renderNav() {
       <span>🕸️</span>
       <span>Network Graph</span>
     </a>
+    <a class="nav-item" href="/hive/${state.activeAlias || ''}" style="text-decoration: none;">
+      <span>🍯</span>
+      <span>Hive Plot</span>
+    </a>
+    <a class="nav-item" href="/pack/${state.activeAlias || ''}" style="text-decoration: none;">
+      <span>⭕</span>
+      <span>Circle Packing</span>
+    </a>
   `;
 }
 
@@ -520,7 +528,7 @@ async function fetchUsers(append = false, silent = false) {
     "before_last_crawled_at","after_last_crawled_at", // New
     "before_first_seen_at","after_first_seen_at", // New
   ];
-  for (const key of numericFilters) {
+  for (const key of [...numericFilters, ...dateFilters]) {
     if (state.filters[key] != null) params.set(key, state.filters[key]);
   }
 

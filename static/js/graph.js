@@ -34,6 +34,17 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
   const resetBtn = document.getElementById('reset-btn');
   const communityOverviewBtn = document.getElementById('community-overview-btn');
   const backToCommunityBtn = document.getElementById('back-to-community-btn');
+
+  // Programmatically add Hive Plot button if it's not already in the HTML
+  if (!document.getElementById('hive-view-link')) {
+      const hiveBtn = document.createElement('button');
+      hiveBtn.id = 'hive-view-link';
+      hiveBtn.className = 'btn btn-ghost';
+      hiveBtn.innerHTML = '<span>🍯</span> Hive Plot';
+      hiveBtn.onclick = () => location.href = `/hive/${ACTIVE_ALIAS}`;
+      hiveBtn.style.marginLeft = '0.5rem';
+      if (resetBtn && resetBtn.parentNode) resetBtn.parentNode.appendChild(hiveBtn);
+  }
   
   // Reset selection state and close panel before loading new view
   deselectNode();

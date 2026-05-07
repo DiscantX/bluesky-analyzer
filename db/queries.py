@@ -460,19 +460,6 @@ async def _where(
     if after_first_seen_at is not None:
         clauses.append("p.first_seen_at > ?")
         params.append(after_first_seen_at)
-
-    if before_last_analyzed_at is not None:
-        clauses.append("p.last_analyzed_at < ?")
-        params.append(before_last_analyzed_at)
-    if after_last_analyzed_at is not None:
-        clauses.append("p.last_analyzed_at > ?")
-        params.append(after_last_analyzed_at)
-    if before_last_hydrated_at is not None:
-        clauses.append("p.last_hydrated_at < ?")
-        params.append(before_last_hydrated_at)
-    if after_last_hydrated_at is not None:
-        clauses.append("p.last_hydrated_at > ?")
-        params.append(after_last_hydrated_at)
     if before_last_crawled_at is not None:
         clauses.append("r.last_crawled_at < ?")
         params.append(before_last_crawled_at)
@@ -646,15 +633,20 @@ async def get_graph_data(
                     r.community_id as comm,
                     r.crawl_tier as tier,
                     r.clustering_coefficient as cc,
+                    p.followers_count,
+                    p.posts_count,
+                    p.repost_ratio,
+                    r.i_follow_them,
+                    r.they_follow_me,
                     ROW_NUMBER() OVER (PARTITION BY r.community_id ORDER BY r.flowrank_score DESC) as rank_in_comm
                 FROM account_relationships r
                 JOIN profiles p ON p.id = r.profile_id
                 WHERE r.owner_id = ? AND r.community_id IS NOT NULL
             )
-            SELECT rn.did, rn.handle, rn.rank, rn.comm, rn.tier, cm.name as comm_name
+            SELECT rn.*, cm.name as comm_name
             FROM RankedNodes rn
             LEFT JOIN community_metadata cm ON cm.community_id = rn.comm AND cm.owner_id = ?
-            WHERE rank_in_comm <= 50
+            WHERE rank_in_comm <= 500
                OR (cc < 0.1 AND rank > 0.001) -- Bridge nodes
             ORDER BY rank DESC
             LIMIT ?
@@ -668,7 +660,9 @@ async def get_graph_data(
                 UNION
                 SELECT follower_did as did FROM follow_edges WHERE followee_did = ?
             )
-            SELECT DISTINCT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier, cm.name as comm_name
+            SELECT DISTINCT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier, cm.name as comm_name,
+                   r.clustering_coefficient as cc, p.followers_count, p.posts_count, p.repost_ratio,
+                   r.i_follow_them, r.they_follow_me
             FROM account_relationships r
             JOIN profiles p ON p.id = r.profile_id
             LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id
@@ -715,7 +709,9 @@ async def get_graph_data(
                     r.flowrank_score as rank,
                     r.community_id as comm,
                     r.crawl_tier as tier,
-                    cm.name as comm_name
+                    cm.name as comm_name,
+                    r.clustering_coefficient as cc, p.followers_count, p.posts_count, p.repost_ratio,
+                    r.i_follow_them, r.they_follow_me
                 FROM account_relationships r
                 JOIN profiles p ON p.id = r.profile_id
                 LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id
@@ -724,10 +720,62 @@ async def get_graph_data(
                 LIMIT ?
             """
             params = [owner_id, community_id, limit]
+
+    elif mode == "packing":
+        # Hierarchical data for Zoomable Circle Packing
+        # 1. Get top 100 members per community by FlowRank (Source of truth for existing communities)
+        members_query = """
+            WITH RankedMembers AS (
+                SELECT 
+                    r.did, p.handle, r.community_id, r.flowrank_score as rank, p.top_keywords,
+                    ROW_NUMBER() OVER (PARTITION BY r.community_id ORDER BY r.flowrank_score DESC) as rn
+                FROM account_relationships r
+                JOIN profiles p ON p.id = r.profile_id
+                WHERE r.owner_id = ? AND r.community_id IS NOT NULL
+            )
+            SELECT * FROM RankedMembers WHERE rn <= 100
+        """
+        members_data = await conn.execute_query_dict(members_query, [owner_id])
+
+        # 2. Identify unique communities and fetch metadata if it exists
+        cids = list({m["community_id"] for m in members_data})
+        meta_lookup = {}
+        if cids:
+            placeholders = ",".join(["?"] * len(cids))
+            comm_meta = await conn.execute_query_dict(
+                f"SELECT community_id, name, description FROM community_metadata WHERE owner_id = ? AND community_id IN ({placeholders})",
+                [owner_id] + cids
+            )
+            meta_lookup = {c["community_id"]: c for c in comm_meta}
+        
+        # 3. Assemble hierarchy
+        communities_map = {}
+        for m in members_data:
+            cid = m["community_id"]
+            if cid not in communities_map:
+                meta = meta_lookup.get(cid, {})
+                communities_map[cid] = {
+                    "name": meta.get("name") or f"Community {cid}",
+                    "id": cid,
+                    "children": []
+                }
+            
+            kws = json.loads(m["top_keywords"]) if m["top_keywords"] else {}
+            communities_map[cid]["children"].append({
+                "name": m["handle"],
+                "value": m["rank"] or 0.0001,
+                "keywords": list(kws.keys())[:5],
+                "did": m["did"]
+            })
+        
+        return {"name": "Network", "children": list(communities_map.values()), "metadata": {"mode": "packing"}}
+
     else:
         # Default fallback
         nodes_query = """
-            SELECT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier, cm.name as comm_name
+            SELECT p.did, p.handle, r.flowrank_score as rank, r.community_id as comm, r.crawl_tier as tier, cm.name as comm_name,
+                   r.clustering_coefficient as cc, p.followers_count, p.posts_count, r.repost_ratio, 
+                   r.i_follow_them, r.they_follow_me
             FROM account_relationships r
             JOIN profiles p ON p.id = r.profile_id
             LEFT JOIN community_metadata cm ON cm.community_id = r.community_id AND cm.owner_id = r.owner_id

@@ -21,7 +21,6 @@ from analyzer.fetch import fetch_feeds_concurrent, fetch_all_follows, fetch_all_
 
 logger = logging.getLogger(__name__)
 SQLITE_IN_CHUNK = 32766  # SQLite parameter limit (SQLITE_MAX_VARIABLE_NUMBER) is 32,766
-CLUSTERING_TOP_N = 1000
 FULL_LOUVAIN_MAX_NODES = 10000
 
 
@@ -87,8 +86,8 @@ async def run_graph_analysis(owner: SavedAccount, on_progress=None):
             community_map[did] = i
 
     if on_progress:
-        await on_progress(f"Computing clustering (top {CLUSTERING_TOP_N})...", 40)
-    clustering = await loop.run_in_executor(None, _compute_clustering, undirected, pr)
+        await on_progress(f"Computing clustering (top {settings.clustering_top_n})...", 40)
+    clustering = await loop.run_in_executor(None, _compute_clustering, undirected, pr, settings.clustering_top_n)
 
     # 5. Persist back to DB. Use executemany because saving tens of thousands
     # of rows one-by-one makes sync shutdown and Ctrl+C feel wedged.
@@ -391,11 +390,11 @@ def _compute_communities(undirected: nx.Graph, resolution: float, node_count: in
         logger.error(f"Community detection failed: {e}")
         return []
 
-def _compute_clustering(undirected: nx.Graph, pr: Dict):
+def _compute_clustering(undirected: nx.Graph, pr: Dict, top_n: int = 1000):
     try:
        top_nodes = [
             node
-            for node, _ in sorted(pr.items(), key=lambda item: item[1], reverse=True)[:CLUSTERING_TOP_N]
+            for node, _ in sorted(pr.items(), key=lambda item: item[1], reverse=True)[:top_n]
         ]
        return nx.clustering(undirected, nodes=top_nodes)
      

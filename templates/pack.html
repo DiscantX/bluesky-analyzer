@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Circle Packing: Community Topics - {{ alias }}</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { background: #0c0e14; color: #f8fafc; margin: 0; overflow: hidden; display: block; }
+        circle { cursor: pointer; stroke-width: 1.5px; transition: stroke 0.2s; }
+        circle:hover { stroke: #fff !important; }
+        .label { font: 11px sans-serif; text-anchor: middle; fill: #fff; pointer-events: none; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
+        .keyword { font-size: 8px; fill: #94a3b8; font-weight: normal; }
+        .controls { position: fixed; top: 20px; left: 20px; z-index: 10; background: rgba(30, 41, 59, 0.8); padding: 15px; border-radius: 8px; border: 1px solid #334155; }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <h2 style="margin-top:0">Community Topics</h2>
+        <p style="font-size: 11px; color: #94a3b8; max-width: 200px;">
+            Circles sized by <b>FlowRank</b>.<br>
+            Click a community to zoom in and see profile keywords.
+        </p>
+        <button onclick="location.href='/graph/{{ alias }}'" class="btn btn-ghost">Back to Force Graph</button>
+    </div>
+    <svg id="pack-svg"></svg>
+
+    <script>
+        const ALIAS = "{{ alias }}";
+    </script>
+    <script src="/static/js/pack.js"></script>
+</body>
+</html>

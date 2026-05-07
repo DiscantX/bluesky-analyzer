@@ -53,12 +53,16 @@ class BusLogHandler(logging.Handler):
         if alias and record.name.startswith(("httpx", "httpcore")):
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(bus.emit(alias, {
-                    "kind": "progress",
-                    "operation": op,
-                    "message": record.getMessage(),
-                    "is_heartbeat": True
-                }))
+                # loop.create_task is not thread-safe. Use call_soon_threadsafe 
+                # because logging can occur from any background thread.
+                loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(bus.emit(alias, {
+                        "kind": "progress",
+                        "operation": op,
+                        "message": record.getMessage(),
+                        "is_heartbeat": True
+                    }))
+                )
             except RuntimeError:
                 pass
 
@@ -357,6 +361,14 @@ async def index(request: Request):
 @app.get("/graph/{alias}", response_class=HTMLResponse)
 async def graph_view(request: Request, alias: str):
     return templates.TemplateResponse(request, "graph.html", {"alias": alias})
+
+@app.get("/hive/{alias}", response_class=HTMLResponse)
+async def hive_view(request: Request, alias: str):
+    return templates.TemplateResponse(request, "hive.html", {"alias": alias})
+
+@app.get("/pack/{alias}", response_class=HTMLResponse)
+async def pack_view(request: Request, alias: str):
+    return templates.TemplateResponse(request, "pack.html", {"alias": alias})
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health")

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hive Plot: Quality vs Reach - {{ alias }}</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { background: #0f172a; color: #f8fafc; margin: 0; overflow: hidden; font-family: sans-serif; display: block; }
+        .axis { stroke: #334155; stroke-width: 2px; }
+        .axis-label { fill: #94a3b8; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+        .link { fill: none; stroke-opacity: 0.2; stroke-width: 1px; }
+        .node { stroke: #0f172a; stroke-width: 1px; cursor: pointer; }
+        .node:hover { stroke: #fff; stroke-width: 2px; }
+        #tooltip { position: fixed; background: rgba(15, 23, 42, 0.9); border: 1px solid #334155; padding: 8px; border-radius: 4px; pointer-events: none; opacity: 0; z-index: 100; font-size: 12px; }
+        .controls { position: fixed; top: 20px; left: 20px; z-index: 10; background: rgba(30, 41, 59, 0.8); padding: 15px; border-radius: 8px; border: 1px solid #334155; }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <h2 style="margin-top:0">Hive Plot: Network Dynamics</h2>
+        <p style="font-size: 11px; color: #94a3b8; max-width: 200px;">
+            <b>Axis 0 (Top):</b> Influence (FlowRank)<br>
+            <b>Axis 1 (Left):</b> Activity (Post Volume)<br>
+            <b>Axis 2 (Right):</b> Core (Clustering Coeff.)
+        </p>
+        <div class="field" style="margin: 15px 0;">
+            <label style="display:flex; justify-content:space-between;">
+                Min Followers: <span id="threshold-val">0</span>
+            </label>
+            <input type="range" id="follower-threshold" min="0" max="1000" value="0" style="width:100%">
+        </div>
+        <div class="field" style="margin: 15px 0;">
+            <label class="toggle-wrap">
+                <input type="checkbox" id="color-by-comm">
+                <div class="toggle-slider"></div>
+                <span style="margin-left: 10px; font-size: 11px;">Color by Community</span>
+            </label>
+        </div>
+        <button onclick="location.href='/graph/{{ alias }}'" class="btn btn-ghost">Back to Force Graph</button>
+    </div>
+    <div id="tooltip"></div>
+    <svg id="hive-svg"></svg>
+
+    <script>
+        const ALIAS = "{{ alias }}";
+    </script>
+    <script src="/static/js/hive.js"></script>
+</body>
+</html>
