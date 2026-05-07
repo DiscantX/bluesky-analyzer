@@ -1,4 +1,4 @@
-"""
+r"""
 analyzer/crawl.py
 Implements the priority-based graph crawler for network expansion.
 
@@ -22,7 +22,7 @@ from db.profile_store import upsert_profile_relationship
 from analyzer.fetch import public_fetch_graph, public_fetch_profiles
 from analyzer.analyze import parse_dt
 from analyzer.metrics import run_graph_analysis
-from main import DB_PATH # Import DB_PATH from main.py
+import config
 from settings_cache import settings_cache
 
 logger = logging.getLogger(__name__)
@@ -36,8 +36,8 @@ class CrawlBudgetExceeded(Exception):
     pass
 
 def _get_db_size_mb() -> float:
-    if DB_PATH.exists():
-        return DB_PATH.stat().st_size / (1024 * 1024)
+    if config.DB_PATH.exists():
+        return config.DB_PATH.stat().st_size / (1024 * 1024)
     return 0.0
 
 def _is_user_expandable(user: AccountRelationship) -> bool:

@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
+import config
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -99,8 +100,8 @@ logging.getLogger("httpcore").setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR = Path(__file__).parent
-DB_PATH  = BASE_DIR / "data.db"
+DB_PATH = config.DB_PATH
+BASE_DIR = DB_PATH.parent
 
 
 def ensure_sqlite_compat_columns() -> None:

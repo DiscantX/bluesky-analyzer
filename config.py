@@ -28,6 +28,7 @@ except ImportError:
     KeyringError = Exception  # type: ignore
 
 ACCOUNTS_FILE = Path(__file__).parent / "accounts.json"
+DB_PATH = Path(__file__).parent / "data.db"
 KEYRING_SERVICE = "bluesky_analyzer"
 
 
