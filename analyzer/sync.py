@@ -20,7 +20,8 @@ from typing import AsyncGenerator
 from analyzer.client import BskyClient, RateLimitTracker
 from analyzer.fetch import fetch_all_follows, fetch_all_followers, fetch_feeds_concurrent, fetch_profiles_detailed
 from analyzer.analyze import build_tracked_user_data
-from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge, Profile, GlobalSettings
+from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge, Profile
+from settings_cache import settings_cache
 from db.profile_store import upsert_profile_relationship
 from analyzer.manager import bus, current_alias_var, current_op_var
 from analyzer.metrics import run_graph_analysis
@@ -70,7 +71,6 @@ async def _filter_stale_accounts(
     Returns: (dids_to_analyze, dids_to_skip)
     """
     now = datetime.now(timezone.utc)
-    settings = await GlobalSettings.get(id=1)
 
     # Optimization: Use values() to avoid expensive ORM object instantiation for the whole list
     rel_data = await AccountRelationship.filter(
@@ -101,8 +101,9 @@ async def _filter_stale_accounts(
         time_since_analysis = now - last_analyzed
 
         # Override staleness if ignore_staleness_threshold_days is set and exceeded
-        if settings.ignore_staleness_threshold_days > 0 and \
-           time_since_analysis.days >= settings.ignore_staleness_threshold_days:
+        ignore_staleness = settings_cache.get("ignore_staleness_threshold_days", 0)
+        if ignore_staleness > 0 and \
+           time_since_analysis.days >= ignore_staleness:
             to_analyze.append(did)
             continue
 
@@ -182,7 +183,6 @@ async def run_sync(
     client: BskyClient,
     alias: str,
 ) -> None:
-    settings = await GlobalSettings.get(id=1)
     """
     Perform a full sync. Progress events are pushed to the broadcast bus
     so the SSE endpoint can stream them to the browser.
@@ -334,7 +334,7 @@ async def run_sync(
         async for did, feed_items in fetch_feeds_concurrent(
             client,
             dids_to_analyze,
-            limit_per_actor=settings.feed_sample_size,
+            limit_per_actor=settings_cache.get("feed_sample_size", 100),
         ):
             completed += 1
             
@@ -345,8 +345,8 @@ async def run_sync(
                 owner_did=owner_did,
                 i_follow_them=did in follows_dids,
                 they_follow_me=did in followers_dids,
-                inactive_days=settings.inactivity_threshold_days,
-                repost_threshold=settings.repost_ratio_threshold,
+                inactive_days=settings_cache.get("inactivity_threshold_days", 90),
+                repost_threshold=settings_cache.get("repost_ratio_threshold", 0.7),
             )
             
             # Apply analysis data to the profile object for bulk update

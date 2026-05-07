@@ -15,16 +15,14 @@ import json
 from datetime import datetime, timezone, timedelta
 import httpx
 from tortoise.expressions import Q
-from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem, GlobalSettings
+from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem
 from db.profile_store import upsert_profile_relationship
 from analyzer.fetch import public_fetch_graph, public_fetch_profiles
 from analyzer.analyze import parse_dt
 from analyzer.metrics import run_graph_analysis
+from settings_cache import settings_cache
 
 logger = logging.getLogger(__name__)
-
-# Minimum connections to existing tracked users before a stub is expanded
-MIN_CONNECTION_THRESHOLD = 3
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -35,7 +33,7 @@ def _is_user_expandable(user: AccountRelationship) -> bool:
         return True
     if user.i_follow_them or user.they_follow_me:
         return True
-    return user.in_subgraph_degree >= MIN_CONNECTION_THRESHOLD
+    return user.in_subgraph_degree >= settings_cache.get("min_connection_threshold", 3)
 
 
 async def reset_interrupted_crawl_work(owner: SavedAccount) -> None:
@@ -147,7 +145,6 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     3. Save new edges and create stubs.
     4. Update priorities for affected accounts.
     """
-    settings = await GlobalSettings.get(id=1)
     await CrawlRun.filter(account=owner, status="running", finished_at__isnull=True).update(
         status="paused",
         last_message="Interrupted while server was offline.",
@@ -218,11 +215,15 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     # FIX 2: Hydration semaphore increased from 2 → 5.
     # Hydration is a read-only operation; the conservative limit of 2 was
     # unnecessarily throttling throughput by 2-5x.
-    concurrency = settings.crawl_concurrency
-    if settings.disable_internal_rate_limits:
-        concurrency = 100
-    crawl_semaphore = asyncio.Semaphore(concurrency)
-    hydration_semaphore = asyncio.Semaphore(10)  # Increased for higher throughput
+    crawl_limit = settings_cache.get("crawl_concurrency", 3)
+    hydrate_limit = settings_cache.get("crawl_hydration_concurrency", 5)
+    
+    if settings_cache.get("disable_internal_rate_limits", False):
+        crawl_limit = 100
+        hydrate_limit = 100
+
+    crawl_semaphore = asyncio.Semaphore(crawl_limit)
+    hydration_semaphore = asyncio.Semaphore(hydrate_limit)
 
     candidates = await claim_crawl_items(owner, batch_size)
 
@@ -255,7 +256,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 return
 
             # Enforcement of connection threshold for stubs
-            if user.crawl_tier == 0 and user.in_subgraph_degree < settings.min_connection_threshold:
+            if user.crawl_tier == 0 and user.in_subgraph_degree < settings_cache.get("min_connection_threshold", 3):
                 if not (user.i_follow_them or user.they_follow_me):
                     skipped_profile = await user.profile
                     logger.debug(f"Skipping @{skipped_profile.handle} expansion (degree {user.in_subgraph_degree} < threshold)")
@@ -369,7 +370,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                             break
 
                         cursor = next_cursor
-                        if not settings.disable_internal_rate_limits:
+                        if not settings_cache.get("disable_internal_rate_limits", False):
                             await asyncio.sleep(0.01)
 
                 # Run both directions concurrently
@@ -481,13 +482,12 @@ async def enqueue_crawl_user(owner: SavedAccount, user: AccountRelationship) -> 
 
 async def seed_crawl_queue(owner: SavedAccount, limit: int = 5000, on_progress=None) -> int:
     """Populate the persisted queue from tracked users that are ready to expand."""
-    settings = await GlobalSettings.get(id=1)
     now = _now()
     expandable = (
         Q(i_follow_them=True) |
         Q(they_follow_me=True) |
         Q(crawl_tier__gt=0) |
-        Q(in_subgraph_degree__gte=settings.min_connection_threshold)
+        Q(in_subgraph_degree__gte=settings_cache.get("min_connection_threshold", 3))
     )
     users = await AccountRelationship.filter(
         owner=owner,

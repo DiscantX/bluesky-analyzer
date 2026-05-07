@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 from atproto import Client
 from atproto_client.exceptions import RequestException
+from settings_cache import settings_cache
 
 logger = logging.getLogger(__name__)
 
@@ -95,18 +96,16 @@ class BskyClient:
         Lazily initialise the semaphore so the event loop exists when it's created.
         Reads feed_fetch_concurrency from GlobalSettings if not overridden.
         """
-        if self._semaphore is None:
-            if self._concurrency_override is not None:
-                concurrency = self._concurrency_override
-            else:
-                try:
-                    from db.models import GlobalSettings
-                    settings = await GlobalSettings.get(id=1)
-                    concurrency = settings.feed_fetch_concurrency
-                except Exception:
-                    concurrency = DEFAULT_CONCURRENCY
-            self._semaphore = asyncio.Semaphore(concurrency)
-            logger.debug(f"[{self.alias}] BskyClient semaphore initialized at concurrency={concurrency}")
+        target = self._concurrency_override
+        if target is None:
+            target = settings_cache.get("feed_fetch_concurrency", DEFAULT_CONCURRENCY)
+
+        # Re-initialize if never created OR if the underlying setting has changed
+        if self._semaphore is None or getattr(self, "_last_concurrency", None) != target:
+            self._semaphore = asyncio.Semaphore(target)
+            self._last_concurrency = target
+            logger.debug(f"[{self.alias}] BskyClient semaphore sync'd to concurrency={target}")
+            
         return self._semaphore
 
     # ── Session management ─────────────────────────────────────────────────────
@@ -188,9 +187,6 @@ class BskyClient:
         loop = asyncio.get_event_loop()
         retries = 0
 
-        from db.models import GlobalSettings
-        settings = await GlobalSettings.get(id=1)
-
         async def execute_with_retry():
             nonlocal retries
             while True:
@@ -219,7 +215,7 @@ class BskyClient:
                     else:
                         raise
 
-        if settings.disable_internal_rate_limits:
+        if settings_cache.get("disable_internal_rate_limits", False):
             return await execute_with_retry()
 
         semaphore = await self._get_semaphore()

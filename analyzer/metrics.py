@@ -13,15 +13,15 @@ from datetime import datetime, timezone, timedelta
 from networkx.algorithms.link_analysis.pagerank_alg import _pagerank_python
 from typing import Dict, Any
 from tortoise import connections, transactions
-from db.models import AccountRelationship, FollowEdge, SavedAccount, CommunityMetadata, GlobalSettings, Profile
+from db.models import AccountRelationship, FollowEdge, SavedAccount, CommunityMetadata, Profile
 from analyzer.client import get_client
 from analyzer.analyze import build_tracked_user_data, STOP_WORDS
 from sklearn.feature_extraction.text import TfidfVectorizer
 from analyzer.fetch import fetch_feeds_concurrent, fetch_all_follows, fetch_all_followers
+from settings_cache import settings_cache
 
 logger = logging.getLogger(__name__)
 SQLITE_IN_CHUNK = 32766  # SQLite parameter limit (SQLITE_MAX_VARIABLE_NUMBER) is 32,766
-FULL_LOUVAIN_MAX_NODES = 10000
 
 
 def _chunks(values: list[str], size: int = SQLITE_IN_CHUNK):
@@ -66,8 +66,6 @@ async def run_graph_analysis(owner: SavedAccount, on_progress=None):
     if G.number_of_nodes() == 0:
         return
 
-    settings = await GlobalSettings.get(id=1)
-
     # 4. Compute metrics in a thread pool to avoid blocking the event loop
     loop = asyncio.get_running_loop()
 
@@ -78,7 +76,8 @@ async def run_graph_analysis(owner: SavedAccount, on_progress=None):
     if on_progress:
         await on_progress(f"Detecting communities ({G.number_of_nodes()} nodes)...", 30)
     undirected = await loop.run_in_executor(None, G.to_undirected)
-    communities = await loop.run_in_executor(None, _compute_communities, undirected, settings.louvain_resolution, G.number_of_nodes())
+    res = settings_cache.get("louvain_resolution", 1.0)
+    communities = await loop.run_in_executor(None, _compute_communities, undirected, res, G.number_of_nodes())
     
     community_map = {}
     for i, community_nodes in enumerate(communities):
@@ -86,8 +85,9 @@ async def run_graph_analysis(owner: SavedAccount, on_progress=None):
             community_map[did] = i
 
     if on_progress:
-        await on_progress(f"Computing clustering (top {settings.clustering_top_n})...", 40)
-    clustering = await loop.run_in_executor(None, _compute_clustering, undirected, pr, settings.clustering_top_n)
+        top_n = settings_cache.get("clustering_top_n", 1000)
+        await on_progress(f"Computing clustering (top {top_n})...", 40)
+    clustering = await loop.run_in_executor(None, _compute_clustering, undirected, pr, top_n)
 
     # 5. Persist back to DB. Use executemany because saving tens of thousands
     # of rows one-by-one makes sync shutdown and Ctrl+C feel wedged.
@@ -260,7 +260,6 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
     """
     logger.info(f"Ensuring top keywords for key community members for {owner.handle}...")
     conn = connections.get("default")
-    settings = await GlobalSettings.get(id=1)
     
     # Fetch top N members by FlowRank for each community
     # Also get their current top_keywords and last_analyzed_at
@@ -336,7 +335,7 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
     async for did, feed_items in fetch_feeds_concurrent(
         client,
         dids_to_reanalyze,
-        limit_per_actor=settings.feed_sample_size,
+        limit_per_actor=settings_cache.get("feed_sample_size", 100),
     ):
         completed += 1
         profile_obj = profiles_to_reanalyze.get(did)
@@ -350,8 +349,8 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
             owner_did=owner.did,
             i_follow_them=did in owner_follows,
             they_follow_me=did in owner_followers,
-            inactive_days=settings.inactivity_threshold_days,
-            repost_threshold=settings.repost_ratio_threshold,
+            inactive_days=settings_cache.get("inactivity_threshold_days", 90),
+            repost_threshold=settings_cache.get("repost_ratio_threshold", 0.7),
         )
         data["last_analyzed_at"] = now
 
@@ -385,7 +384,8 @@ def _compute_pagerank(G: nx.DiGraph):
 
 def _compute_communities(undirected: nx.Graph, resolution: float, node_count: int):
     try:
-        if node_count <= FULL_LOUVAIN_MAX_NODES:
+        louvain_max = settings_cache.get("louvain_max_nodes", 10000)
+        if node_count <= louvain_max:
             return nx.community.louvain_communities(undirected, seed=42, resolution=resolution)
         elif node_count <= 500000:
             return nx.community.label_propagation_communities(undirected)

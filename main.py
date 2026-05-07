@@ -199,6 +199,9 @@ def ensure_sqlite_compat_columns() -> None:
             "feed_fetch_concurrency = 15 WHERE feed_fetch_concurrency = 0 OR feed_fetch_concurrency IS NULL",
             "crawl_concurrency = 3 WHERE crawl_concurrency = 0 OR crawl_concurrency IS NULL",
             "profile_analysis_batch_size = 30 WHERE profile_analysis_batch_size = 0 OR profile_analysis_batch_size IS NULL",
+            "louvain_resolution = 1.0 WHERE louvain_resolution < 0.1 OR louvain_resolution IS NULL",
+            "louvain_max_nodes = 10000 WHERE louvain_max_nodes < 1000 OR louvain_max_nodes IS NULL",
+            "clustering_top_n = 1000 WHERE clustering_top_n < 100 OR clustering_top_n IS NULL",
         ]
         for update in cleanup_updates:
             conn.execute(f"UPDATE global_settings SET {update}")
@@ -262,6 +265,8 @@ async def lifespan(app: FastAPI):
         # Initialize default settings and apply CLI overrides
         from db.models import GlobalSettings, SavedAccount
         settings, _ = await GlobalSettings.get_or_create(id=1)
+        from settings_cache import settings_cache
+        await settings_cache.refresh()
         if app.state.args.ignore_staleness_threshold > 0:
             settings.ignore_staleness_threshold_days = app.state.args.ignore_staleness_threshold
             await settings.save()

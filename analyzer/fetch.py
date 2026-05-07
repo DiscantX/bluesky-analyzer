@@ -16,20 +16,13 @@ import logging
 from typing import AsyncGenerator, Any
 
 from analyzer.client import BskyClient
-from db.models import GlobalSettings
+from settings_cache import settings_cache
 import httpx
 
 logger = logging.getLogger(__name__)
 
-# FIX 3: Reduced from 0.1 (100ms) to 0.01 (10ms).
-# 100ms * 100 pages = 10 dead seconds per large follows list.
-# 10ms is still a polite delay while being 10x faster.
-_POLITE_DELAY = 0.01
-
-
 async def fetch_all_follows(client: BskyClient, actor: str) -> list:
     """Fetch every account that `actor` follows, paginating automatically."""
-    settings = await GlobalSettings.get(id=1)
     results = []
     cursor = None
     while True:
@@ -39,15 +32,15 @@ async def fetch_all_follows(client: BskyClient, actor: str) -> list:
         cursor = getattr(resp, "cursor", None)
         if not cursor or not batch:
             break
-        if not settings.disable_internal_rate_limits:
-            await asyncio.sleep(_POLITE_DELAY)
+        if not settings_cache.get("disable_internal_rate_limits", False):
+            delay = settings_cache.get("api_polite_delay_ms", 10) / 1000.0
+            await asyncio.sleep(delay)
     logger.info(f"Fetched {len(results)} follows for {actor}.")
     return results
 
 
 async def fetch_all_followers(client: BskyClient, actor: str) -> list:
     """Fetch every account that follows `actor`, paginating automatically."""
-    settings = await GlobalSettings.get(id=1)
     results = []
     cursor = None
     while True:
@@ -57,8 +50,9 @@ async def fetch_all_followers(client: BskyClient, actor: str) -> list:
         cursor = getattr(resp, "cursor", None)
         if not cursor or not batch:
             break
-        if not settings.disable_internal_rate_limits:
-            await asyncio.sleep(_POLITE_DELAY)
+        if not settings_cache.get("disable_internal_rate_limits", False):
+            delay = settings_cache.get("api_polite_delay_ms", 10) / 1000.0
+            await asyncio.sleep(delay)
     logger.info(f"Fetched {len(results)} followers for {actor}.")
     return results
 
@@ -164,7 +158,6 @@ async def public_fetch_profiles(dids: list[str], client: httpx.AsyncClient | Non
     FIX 5 (partial): Polite delay also reduced to 10ms here.
     Full concurrency improvement requires the semaphore refactor in crawl.py.
     """
-    settings = await GlobalSettings.get(id=1)
     results = []
     async def _fetch_batch(c: httpx.AsyncClient):
         for i in range(0, len(dids), 25):
@@ -182,8 +175,9 @@ async def public_fetch_profiles(dids: list[str], client: httpx.AsyncClient | Non
                 results.extend(resp.json().get("profiles", []))
             except Exception as e:
                 logger.error(f"Public profile hydration failed: {e}")
-            if not settings.disable_internal_rate_limits:
-                await asyncio.sleep(_POLITE_DELAY)
+            if not settings_cache.get("disable_internal_rate_limits", False):
+                delay = settings_cache.get("api_polite_delay_ms", 10) / 1000.0
+                await asyncio.sleep(delay)
                 
     if client:
         await _fetch_batch(client)
@@ -201,7 +195,6 @@ async def fetch_all_graph_public(
     client: httpx.AsyncClient | None = None
 ) -> list[dict]:
     """Paginate through the public graph endpoint."""
-    settings = await GlobalSettings.get(id=1)
     results = []
     cursor = None
     
@@ -217,8 +210,9 @@ async def fetch_all_graph_public(
                 cursor = data.get("cursor")
                 if not cursor or not batch:
                     break
-                if not settings.disable_internal_rate_limits:
-                    await asyncio.sleep(_POLITE_DELAY)
+                if not settings_cache.get("disable_internal_rate_limits", False):
+                    delay = settings_cache.get("api_polite_delay_ms", 10) / 1000.0
+                    await asyncio.sleep(delay)
             except Exception as e:
                 logger.error(f"Public fetch failed for {actor_did} {collection}: {e}")
                 break

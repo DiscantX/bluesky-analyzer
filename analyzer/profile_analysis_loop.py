@@ -25,7 +25,8 @@ from analyzer.analyze import build_tracked_user_data
 from analyzer.client import BskyClient
 from analyzer.fetch import fetch_feeds_concurrent
 from analyzer.manager import bus, global_found_tracker, global_req_tracker, running_tasks, task_key
-from db.models import AccountRelationship, GlobalSettings, SavedAccount, Profile
+from db.models import AccountRelationship, SavedAccount, Profile
+from settings_cache import settings_cache
 from db.profile_store import upsert_profile_relationship
 
 logger = logging.getLogger(__name__)
@@ -48,16 +49,13 @@ IDLE_SLEEP = 60.0
 PRIORITY_ORDER = ["-crawl_tier", "-in_subgraph_degree", "profile__last_analyzed_at"]
 
 
-async def _select_batch(owner: SavedAccount, settings: GlobalSettings) -> list[AccountRelationship]:
+async def _select_batch(owner: SavedAccount) -> list[AccountRelationship]:
     """
     Select the next batch of profiles that need analysis, ordered by priority.
-
-    Priority rules (descending importance):
-      1. Direct follows and followers first (crawl_tier >= 1)
-      2. High in_subgraph_degree (well-connected in crawled graph)
-      3. Oldest last_analyzed_at (or never analyzed) first
     """
-    stale_cutoff = datetime.now(timezone.utc) - ANALYSIS_STALENESS
+    staleness_days = settings_cache.get("profile_analysis_staleness_days", 7)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=staleness_days)
+    batch_size = settings_cache.get("profile_analysis_batch_size", 30)
 
     return await (
         AccountRelationship.filter(owner=owner)
@@ -71,7 +69,7 @@ async def _select_batch(owner: SavedAccount, settings: GlobalSettings) -> list[A
             | Q(profile__last_analyzed_at__lt=stale_cutoff)
         )
         .order_by(*PRIORITY_ORDER)
-        .limit(BATCH_SIZE)
+        .limit(batch_size)
         .prefetch_related("profile")
     )
 
@@ -80,7 +78,6 @@ async def _analyze_batch(
     owner: SavedAccount,
     batch: list[AccountRelationship],
     client: BskyClient,
-    settings: GlobalSettings,
 ) -> int:
     """Fetch feeds and upsert analysis results for a batch. Returns count analyzed."""
     dids = [rel.did for rel in batch]
@@ -93,7 +90,7 @@ async def _analyze_batch(
     async for did, feed_items in fetch_feeds_concurrent(
         client,
         dids,
-        limit_per_actor=settings.feed_sample_size,
+        limit_per_actor=settings_cache.get("feed_sample_size", 100),
     ):
         rel = rel_by_did.get(did)
         if not rel:
@@ -106,8 +103,8 @@ async def _analyze_batch(
             owner_did=owner.did,
             i_follow_them=rel.i_follow_them,
             they_follow_me=rel.they_follow_me,
-            inactive_days=settings.inactivity_threshold_days,
-            repost_threshold=settings.repost_ratio_threshold,
+            inactive_days=settings_cache.get("inactivity_threshold_days", 90),
+            repost_threshold=settings_cache.get("repost_ratio_threshold", 0.7),
         )
         
         for key, value in data.items():
@@ -158,28 +155,29 @@ async def run_profile_analysis_loop(owner: SavedAccount) -> None:
 
     while True:
         try:
-            settings = await GlobalSettings.get(id=1)
             c = await _ensure_client()
+            idle_sleep = settings_cache.get("profile_analysis_idle_sleep_seconds", IDLE_SLEEP)
+
             if c is None:
-                await asyncio.sleep(IDLE_SLEEP)
+                await asyncio.sleep(idle_sleep)
                 continue
 
-            batch = await _select_batch(owner, settings)
+            batch = await _select_batch(owner)
 
             if not batch:
-                logger.debug(f"[profile-analysis-loop] Nothing to analyze for {alias}, sleeping {IDLE_SLEEP}s")
+                logger.debug(f"[profile-analysis-loop] Nothing to analyze for {alias}, sleeping {idle_sleep}s")
                 await bus.emit(alias, {
                     "kind": "progress",
                     "operation": "profile_analysis_loop",
                     "message": "Profile analysis: queue empty, sleeping.",
                     "is_heartbeat": True,
                 })
-                await asyncio.sleep(IDLE_SLEEP)
+                await asyncio.sleep(idle_sleep)
                 continue
 
             logger.info(f"[profile-analysis-loop] Analyzing batch of {len(batch)} for {alias}")
 
-            count = await _analyze_batch(owner, batch, c, settings)
+            count = await _analyze_batch(owner, batch, c)
 
             await bus.emit(alias, {
                 "kind": "progress",
@@ -196,11 +194,11 @@ async def run_profile_analysis_loop(owner: SavedAccount) -> None:
         except Exception as e:
             logger.exception(f"[profile-analysis-loop] Error for {alias}: {e}")
             # Don't die on transient errors — sleep and retry
-            await asyncio.sleep(IDLE_SLEEP)
+            await asyncio.sleep(settings_cache.get("profile_analysis_idle_sleep_seconds", IDLE_SLEEP))
             continue
 
         # Cooperative yield between batches
-        await asyncio.sleep(INTER_BATCH_SLEEP)
+        await asyncio.sleep(settings_cache.get("profile_analysis_inter_batch_sleep_seconds", INTER_BATCH_SLEEP))
 
 
 def start_profile_analysis_loop(account: SavedAccount) -> bool:

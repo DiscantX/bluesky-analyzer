@@ -12,7 +12,8 @@ from analyzer.analyze import build_tracked_user_data
 from analyzer.manager import bus, is_operation_running, running_tasks, task_key
 from analyzer.profile_analysis_loop import start_profile_analysis_loop
 from analyzer.sync import run_sync
-from db.models import CrawlRun, SavedAccount, AccountRelationship, GlobalSettings
+from db.models import CrawlRun, SavedAccount, AccountRelationship
+from settings_cache import settings_cache
 from db.profile_store import upsert_profile_relationship
 
 logger = logging.getLogger(__name__)
@@ -55,12 +56,12 @@ async def promote_stubs(account: SavedAccount):
     Promotes Tier 0 (Stubs) to Tier 1 (Standard) if they meet
     interest thresholds (high connections or influence).
     """
-    settings = await GlobalSettings.get(id=1)
+    threshold = settings_cache.get("min_connection_threshold", 3)
     promotable = await AccountRelationship.filter(
         owner=account,
         crawl_tier=0
     ).filter(
-        Q(in_subgraph_degree__gte=settings.min_connection_threshold) |
+        Q(in_subgraph_degree__gte=threshold) |
         Q(flowrank_score__gt=0.0001)
     ).all()
 
@@ -121,7 +122,8 @@ async def worker_loop():
                 await promote_stubs(account)
 
                 if account.auto_sync_enabled:
-                    stale = not account.last_synced_at or (now - account.last_synced_at) > SYNC_STALENESS
+                    sync_stale_hours = settings_cache.get("sync_staleness_hours", 12)
+                    stale = not account.last_synced_at or (now - account.last_synced_at) > timedelta(hours=sync_stale_hours)
                     if stale or await needs_urgent_sync(account):
                         schedule_sync(account)
 
@@ -132,7 +134,8 @@ async def worker_loop():
         except Exception as e:
             logger.error(f"Worker loop encountered an error: {e}")
 
-        await asyncio.sleep(WORKER_SWEEP_INTERVAL)
+        interval = settings_cache.get("worker_sweep_interval_seconds", WORKER_SWEEP_INTERVAL)
+        await asyncio.sleep(interval)
 
 
 async def run_auto_sync(account: SavedAccount):

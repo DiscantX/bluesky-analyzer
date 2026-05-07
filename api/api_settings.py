@@ -48,6 +48,7 @@ class SettingsSchema(BaseModel):
     # ── Graph metrics ─────────────────────────────────────────────────────────
     clustering_top_n:   int = Field(1000,  ge=100,  le=100000)
     louvain_max_nodes:  int = Field(10000, ge=1000, le=1000000)
+    louvain_resolution: float = Field(1.0, ge=0.1, le=10.0)
 
     class Config:
         from_attributes = True
