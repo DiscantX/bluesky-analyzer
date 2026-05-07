@@ -84,6 +84,40 @@
             transition: opacity 0.1s;
             max-width: 220px;
         }
+
+        #side-panel {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 350px;
+            height: 100vh;
+            background: var(--surface);
+            border-left: 1px solid var(--border);
+            transform: translateX(100%);
+            transition: transform 0.3s ease-in-out;
+            overflow-y: auto;
+            z-index: 1000;
+            backdrop-filter: blur(12px);
+            box-shadow: -4px 0 15px rgba(0,0,0,0.5);
+        }
+
+        #side-panel.open {
+            transform: translateX(0);
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 1rem;
+            right: 1.25rem;
+            background: none;
+            border: none;
+            color: var(--muted);
+            font-size: 1.75rem;
+            cursor: pointer;
+            z-index: 11;
+            transition: color 0.2s;
+        }
+        .close-btn:hover { color: var(--text); }
     </style>
 </head>
 <body>
@@ -110,6 +144,12 @@
 
 <!-- Tooltip -->
 <div id="pack-tooltip"></div>
+
+<!-- Sidebar (Matching graph.js consistency) -->
+<div id="side-panel">
+    <button class="close-btn" onclick="closeSidebar()">×</button>
+    <div id="panel-content"></div>
+</div>
 
 <!-- Canvas -->
 <svg id="pack-svg"></svg>

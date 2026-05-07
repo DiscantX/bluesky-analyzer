@@ -76,35 +76,84 @@
     let currentFocus = root;
 
     function zoomTo(node, animated = true) {
-        const scale  = Math.min(width, height) / (node.r * 2 + 40);
-        const tx     = width  / 2 - node.x * scale;
+        // Profile nodes get minimal padding (2px) to zoom in as much as possible for tiny nodes
+        const padding = node.depth === 2 ? 1 : 40;
+        const scale  = Math.min(width, height) / (node.r * 2 + padding);
+
+        // Offset to keep node centered in the workspace when sidebar is open
+        const panel = document.getElementById('side-panel');
+        const isPanelOpen = panel && panel.classList.contains('open');
+        // Use fixed width matching CSS for consistent camera centering
+        const panelWidth = isPanelOpen ? 350 : 0;
+        
+        const tx     = (width - (isPanelOpen ? panelWidth : 0)) / 2 - node.x * scale;
         const ty     = height / 2 - node.y * scale;
 
         const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
 
         if (animated) {
-            g.transition().duration(650).ease(d3.easeCubicInOut)
+            g.transition().duration(750).ease(d3.easeCubicInOut)
                 .attr("transform", transform);
         } else {
             g.attr("transform", transform);
         }
 
         currentFocus = node;
-        updateLabelVisibility(node, scale);
+        updateLabelVisibility(node, scale, animated);
+        if (node.depth < 2) closeSidebar();
     }
 
-    function updateLabelVisibility(focus, scale) {
-        // Show profile-level labels only when zoomed into a community
-        const isZoomedIn = focus.depth === 1;
+    function updateLabelVisibility(focus, scale, animated = true) {
+        const duration = animated ? 750 : 0;
+        const t = d3.transition().duration(duration).ease(d3.easeCubicInOut);
 
-        label.filter(d => d.depth === 2)
-            .transition().duration(300)
-            .style("opacity", isZoomedIn ? 1 : 0)
-            .style("pointer-events", isZoomedIn ? "auto" : "none");
-
+        // Community labels: visible only when looking at the whole root
         label.filter(d => d.depth === 1)
-            .transition().duration(300)
-            .style("opacity", isZoomedIn ? 0 : 1);
+            .transition(t)
+            .style("opacity", focus.depth === 0 ? 1 : 0);
+
+        // Profile labels: 
+        // - Always show if this specific node is focused.
+        // - Show if focused on parent community AND circle is physically large enough (>25px radius on screen)
+        label.filter(d => d.depth === 2)
+            .transition(t)
+            .style("opacity", d => {
+                if (d === focus) return 1;
+                if (focus.depth === 1 && d.parent === focus && (d.r * scale) > 25) return 1;
+                return 0;
+            })
+            .style("pointer-events", d => (d === focus || (focus.depth === 1 && d.parent === focus)) ? "auto" : "none");
+
+        // Semantic Font Scaling:
+        // Community Names (Depth 1)
+        label.selectAll(".comm-name")
+            .transition(t)
+            .style("font-size", d => (Math.min(22, d.r * scale * 0.25) / scale) + "px")
+            .style("stroke-width", d => (Math.min(22, d.r * scale * 0.25) / scale * 0.15) + "px");
+
+        // Profile Names (Depth 2)
+        label.selectAll(".profile-handle")
+            .transition(t)
+            .style("font-size", d => {
+                const screenTarget = (focus.depth === 2 && d === focus) ? 28 : (focus.depth === 1 ? 15 : 10);
+                return (Math.min(screenTarget, d.r * scale * 0.8) / scale) + "px";
+            })
+            .style("stroke-width", d => {
+                const screenTarget = (focus.depth === 2 && d === focus) ? 28 : (focus.depth === 1 ? 15 : 10);
+                return (Math.min(screenTarget, d.r * scale * 0.8) / scale * 0.25) + "px";
+            });
+
+        // Keywords (Depth 2)
+        label.selectAll(".keyword-tag")
+            .transition(t)
+            .style("font-size", d => {
+                const screenTarget = (focus.depth === 2 && d === focus) ? 14 : (focus.depth === 1 ? 8 : 6);
+                return (Math.min(screenTarget, d.r * scale * 0.5) / scale) + "px";
+            })
+            .style("stroke-width", d => {
+                const screenTarget = (focus.depth === 2 && d === focus) ? 14 : (focus.depth === 1 ? 8 : 6);
+                return (Math.min(screenTarget, d.r * scale * 0.5) / scale * 0.2) + "px";
+            });
     }
 
     // ── Draw circles ───────────────────────────────────────────────────────────
@@ -142,8 +191,11 @@
                 } else {
                     zoomTo(d);             // zoom into community
                 }
-            } else if (d.depth === 2 && d.data.did) {
-                window.open(`https://bsky.app/profile/${d.data.did}`, "_blank");
+            } else if (d.depth === 2 && d.data) {
+                // Open sidebar FIRST so zoomTo can calculate the correct offset for the open panel
+                if (d.data.did) showProfileSidebar(d.data.did);
+                else if (d.data.handle) showProfileSidebar(d.data.handle);
+                zoomTo(d);
             }
         });
 
@@ -160,16 +212,32 @@
         .style("text-anchor", "middle");
 
     // Community labels (visible when zoomed out)
-    label.filter(d => d.depth === 1)
+    const commLabel = label.filter(d => d.depth === 1);
+    
+    commLabel
         .append("text")
         .attr("class", "comm-name")
-        .attr("dy", "-0.2em")
         .style("font-family", "'DM Mono', monospace")
-        .style("font-size", d => `${Math.max(8, Math.min(14, d.r / 8))}px`)
         .style("fill", d => color(d.data.id))
         .style("font-weight", "700")
         .style("letter-spacing", "0.03em")
-        .text(d => d.data.name);
+        .style("text-rendering", "optimizeLegibility")
+        .style("paint-order", "stroke")
+        .style("stroke", "#0c0e14")
+        .style("stroke-width", "4px")
+        .style("stroke-linejoin", "round")
+        .each(function(d) {
+            const words = d.data.name.split(" ");
+            const mid = Math.ceil(words.length / 2);
+            const lines = words.length > 1 ? [words.slice(0, mid).join(" "), words.slice(mid).join(" ")] : [d.data.name];
+            
+            d3.select(this).selectAll("tspan")
+                .data(lines)
+                .join("tspan")
+                .attr("x", 0)
+                .attr("dy", (l, i) => i === 0 ? (lines.length > 1 ? "-0.4em" : "0.35em") : "1.1em")
+                .text(l => l);
+        });
 
     label.filter(d => d.depth === 1)
         .append("text")
@@ -177,6 +245,10 @@
         .style("font-family", "'DM Mono', monospace")
         .style("font-size", d => `${Math.max(7, Math.min(11, d.r / 11))}px`)
         .style("fill", "#6b7280")
+        .style("paint-order", "stroke")
+        .style("stroke", "#0c0e14")
+        .style("stroke-width", "3px")
+        .style("stroke-linejoin", "round")
         .text(d => `${d.children?.length ?? 0} profiles`);
 
     // Profile labels (visible only when zoomed into community)
@@ -185,29 +257,122 @@
 
     profileLabel.append("text")
         .attr("class", "profile-handle")
-        .attr("dy", d => d.data.keywords?.length ? "-0.6em" : "0.35em")
         .style("font-family", "'DM Mono', monospace")
-        .style("font-size", d => `${clamp(d.r * 0.28, 6, 11)}px`)
         .style("fill", "#e8eaf0")
-        .style("font-weight", "600")
-        .text(d => `@${d.data.name}`);
+        .style("font-weight", "700")
+        .style("text-rendering", "optimizeLegibility")
+        .style("paint-order", "stroke")
+        .style("stroke", "#0c0e14")
+        .style("stroke-width", "4px")
+        .style("stroke-linejoin", "round")
+        .each(function(d) {
+            // Resilient name resolution: checks for display_name in various possible JSON paths
+            let raw = d.data;
+            let displayName = raw.display_name || raw.displayName || raw.profile?.display_name || raw.handle || (typeof raw === 'string' ? raw : (raw.name || "Unknown"));
+            
+            // If it's a handle, ensure it has the @ prefix for clarity
+            const isHandle = (displayName === raw.handle || displayName === raw.profile?.handle || displayName.includes('.bsky.social'));
+            if (isHandle && !displayName.startsWith('@')) displayName = '@' + displayName;
+            
+            const words = displayName.split(/\s+/);
+            const lines = (words.length > 1 && !isHandle) 
+                ? [words.slice(0, Math.ceil(words.length/2)).join(" "), words.slice(Math.ceil(words.length/2)).join(" ")] 
+                : [displayName];
+
+            d.handleLines = lines.length;
+            
+            d3.select(this).selectAll("tspan")
+                .data(lines)
+                .join("tspan")
+                .attr("x", 0)
+                .attr("dy", (l, i) => i === 0 ? (lines.length > 1 ? "-0.4em" : "0.35em") : "1.1em")
+                .text(l => l);
+        });
 
     // Keyword chips — rendered as small tspan lines below handle
     profileLabel.each(function(d) {
         const kws = d.data.keywords || [];
         if (!kws.length) return;
         const g_el = d3.select(this);
-        const fs = clamp(d.r * 0.2, 5, 9);
+        const startDy = d.handleLines > 1 ? 3.6 : 2.8; // Increased padding to prevent overlap
 
         kws.slice(0, 3).forEach((kw, i) => {
             g_el.append("text")
-                .attr("dy", `${0.8 + i * 1.1}em`)
+                .attr("class", "keyword-tag")
+                .attr("dy", `${startDy + i * 1.7}em`) 
                 .style("font-family", "'DM Mono', monospace")
-                .style("font-size", `${fs}px`)
                 .style("fill", "#94a3b8")
+                .style("paint-order", "stroke")
+                .style("stroke", "#0c0e14")
+                .style("stroke-width", "3px")
                 .text(kw);
         });
     });
+
+    // ── Sidebar Helpers ────────────────────────────────────────────────────────
+    async function showProfileSidebar(did) {
+        const panel = document.getElementById('side-panel');
+        const content = document.getElementById('panel-content');
+        if (!panel || !content) return;
+
+        // Fallback for alias variable naming inconsistency
+        const currentAlias = (typeof ALIAS !== 'undefined' && ALIAS) ? ALIAS : 
+                            (typeof ACTIVE_ALIAS !== 'undefined' && ACTIVE_ALIAS) ? ACTIVE_ALIAS : 
+                            window.location.pathname.split('/').pop();
+        
+        if (!currentAlias) return;
+
+        panel.classList.add('open');
+        content.innerHTML = `<div class="state-box">Loading profile...</div>`;
+
+        try {
+            const filter = did.startsWith('did:') ? { field: "did", op: "eq", value: did } : { field: "handle", op: "eq", value: did };
+            const res = await fetch(`/api/users/${currentAlias}?limit=1&filter_tree=${JSON.stringify({ op: "AND", conditions: [filter] })}`);
+            const result = await res.json();
+            const u = result.users[0];
+            if (!u) { content.innerHTML = `<div class="state-box">Profile not in DB.</div>`; return; }
+
+            content.innerHTML = `
+                <div style="padding: 1rem; color: var(--text);">
+                    <div style="display:flex; gap:1rem; align-items:center; margin-bottom:1.5rem;">
+                        ${u.avatar_url ? `<img src="${u.avatar_url}" style="width:56px; height:56px; border-radius:50%; border:1px solid var(--border);">` : `<div class="avatar-placeholder" style="width:56px; height:56px;">${(u.display_name || u.handle || 'U')[0].toUpperCase()}</div>`}
+                        <div style="overflow:hidden;">
+                            <div style="font-weight:800; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; font-size:1.1rem;">${u.display_name || '—'}</div>
+                            <div style="font-family:var(--mono); font-size:0.75rem; color:var(--accent);">@${u.handle}</div>
+                        </div>
+                    </div>
+
+                    <div class="sidebar-label">Network Position</div>
+                    <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.75rem; margin-bottom:1.5rem; border: 1px solid var(--border);">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>FlowRank</span><span style="color:var(--accent); font-weight:bold;">${(u.flowrank_score * 1000).toFixed(4)}</span></div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>Community</span><span style="color:var(--accent2);">${u.comm_name || '#' + (u.community_id ?? '—')}</span></div>
+                        <div style="display:flex; justify-content:space-between;"><span>Followers</span><span>${(u.followers_count || 0).toLocaleString()}</span></div>
+                    </div>
+
+                    <div class="sidebar-label">Activity Signals</div>
+                    <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.75rem; margin-bottom:1.5rem; border: 1px solid var(--border);">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>Repost Ratio</span><span>${(u.repost_ratio * 100).toFixed(1)}%</span></div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>Last Post</span><span>${u.days_since_post != null ? u.days_since_post + 'd ago' : '—'}</span></div>
+                        <div style="display:flex; justify-content:space-between;"><span>Interacted</span><span style="color:${u.interacted_with_owner ? 'var(--accent2)' : 'var(--muted)'}; font-weight:bold;">${u.interacted_with_owner ? 'YES' : 'NO'}</span></div>
+                    </div>
+
+                    <div style="display:flex; gap:0.5rem; margin-top:1.5rem;">
+                        <a href="https://bsky.app/profile/${u.did}" target="_blank" class="btn btn-primary" style="flex:1; justify-content:center; text-decoration:none; font-weight: 700;">Open in Bluesky</a>
+                    </div>
+                </div>
+            `;
+        } catch (err) {
+            content.innerHTML = `<div class="state-box" style="color:var(--danger)">Failed to fetch profile.</div>`;
+        }
+    }
+
+    function closeSidebar() {
+        const panel = document.getElementById('side-panel');
+        if (panel) panel.classList.remove('open');
+    }
+
+    // Expose closeSidebar globally so it can be called from HTML onclick
+    window.closeSidebar = closeSidebar;
 
     // ── Tooltip ────────────────────────────────────────────────────────────────
     const tooltip = d3.select("#pack-tooltip");
@@ -216,10 +381,12 @@
         .style("cursor", "pointer")
         .on("mouseover.tip", function(event, d) {
             const kws = d.data.keywords?.join(", ") || "—";
+            const name = d.data.display_name || d.data.displayName || d.data.handle || (typeof d.data === 'string' ? d.data : d.data.name);
+
             tooltip
                 .style("opacity", 1)
                 .html(`
-                    <div style="font-weight:700;color:#5b8cf8">@${d.data.name}</div>
+                    <div style="font-weight:700;color:#5b8cf8">${name}</div>
                     <div style="color:#6b7280;font-size:10px">FlowRank: ${(d.data.value * 1000).toFixed(4)}</div>
                     <div style="margin-top:4px;color:#94a3b8;font-size:10px">${kws}</div>
                 `)

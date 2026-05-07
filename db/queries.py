@@ -731,6 +731,7 @@ async def get_graph_data(
                     SELECT
                         r.did,
                         p.handle,
+                        p.display_name,
                         r.community_id,
                         r.flowrank_score  AS rank,
                         p.top_keywords,
@@ -742,7 +743,7 @@ async def get_graph_data(
                     JOIN profiles p ON p.id = r.profile_id
                     WHERE r.owner_id = ? AND r.community_id IS NOT NULL
                 )
-                SELECT did, handle, community_id, rank, top_keywords
+                SELECT did, handle, display_name, community_id, rank, top_keywords
                 FROM RankedMembers
                 WHERE rn <= 100
             """
@@ -789,6 +790,8 @@ async def get_graph_data(
 
                 communities_map[cid]["children"].append({
                     "name": m["handle"],
+                    "handle": m["handle"],
+                    "display_name": m["display_name"],
                     "value": max(float(m["rank"] or 0.0), 1e-9),  # D3 pack requires value > 0
                     "keywords": top5,
                     "did": m["did"],

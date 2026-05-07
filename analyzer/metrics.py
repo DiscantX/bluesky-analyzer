@@ -147,13 +147,13 @@ async def generate_community_summaries(owner: SavedAccount, on_progress=None):
         """
         WITH RankedMembers AS (
             SELECT 
-                r.community_id, p.handle, p.top_keywords, r.flowrank_score, r.clustering_coefficient,
+                r.community_id, p.did, p.handle, p.display_name, p.top_keywords, r.flowrank_score, r.clustering_coefficient,
                 ROW_NUMBER() OVER (PARTITION BY r.community_id ORDER BY r.flowrank_score DESC) as rn
             FROM account_relationships r
             JOIN profiles p ON p.id = r.profile_id
             WHERE r.owner_id = ? AND r.community_id IS NOT NULL
         )
-        SELECT community_id, handle, top_keywords, flowrank_score, clustering_coefficient
+        SELECT community_id, did, handle, display_name, top_keywords, flowrank_score, clustering_coefficient
         FROM RankedMembers
         WHERE rn <= 100
         ORDER BY community_id, flowrank_score DESC
@@ -172,7 +172,11 @@ async def generate_community_summaries(owner: SavedAccount, on_progress=None):
             }
         
         if len(communities[cid]["members"]) < 5:
-            communities[cid]["members"].append(f"@{row['handle']}")
+            communities[cid]["members"].append({
+                "handle": row['handle'],
+                "display_name": row['display_name'],
+                "did": row['did']
+            })
             
         if row["top_keywords"]:
             try:
@@ -229,9 +233,10 @@ async def generate_community_summaries(owner: SavedAccount, on_progress=None):
         avg_cc = sum(data["avg_cc"]) / len(data["avg_cc"]) if data["avg_cc"] else 0
         structure = "Tight-knit" if avg_cc > 0.3 else "Broad"
         
+        member_names = [m['display_name'] or f"@{m['handle']}" for m in data["members"]]
         description = ( # Corrected to use significant_kws
             f"A {structure.lower()} group focused on {description_kws}. "
-            f"Primary influencers include {', '.join(data['members'])}."
+            f"Primary influencers include {', '.join(member_names)}."
         )
 
         # Optimization: Accumulate for bulk creation/update logic
