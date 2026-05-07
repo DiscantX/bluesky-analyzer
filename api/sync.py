@@ -21,6 +21,7 @@ import logging
 from analyzer.client import BskyClient
 from analyzer.sync import run_sync
 from analyzer.crawl import crawl_step
+from analyzer.crawl import _get_db_size_mb # Import for current DB size
 from db.models import SavedAccount, SyncRun, CrawlRun, CrawlQueueItem
 from analyzer.manager import running_tasks, bus, is_running, is_operation_running, task_key
 
@@ -236,3 +237,7 @@ async def sync_status(alias: str):
         "sync": sync_payload,
         "crawl": crawl_payload,
     }
+    # Add global crawl budget info
+    response["crawl_budget_mb"] = settings_cache.get("crawl_budget_mb", 1024)
+    response["current_db_size_mb"] = _get_db_size_mb()
+    return response

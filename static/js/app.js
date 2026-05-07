@@ -17,6 +17,8 @@ const state = {
   variables: [],
   lastUserFetch: 0,
   settings: {},
+  crawlBudgetMb: 0,
+  currentDbSizeMb: 0,
 
   // Filter / sort state — any new filter just gets added here
   filters: {
@@ -293,6 +295,15 @@ function renderStats() {
   el("stat-pending").textContent   = fmt(s.pending);
   el("stat-req-rate").textContent   = (s.req_rate || 0) + "/m";
   el("stat-found-rate").textContent = (s.found_rate || 0) + "/m";
+
+  // Crawl Budget
+  if (state.crawlBudgetMb > 0) {
+    const pctUsed = (state.currentDbSizeMb / state.crawlBudgetMb) * 100;
+    const budgetEl = el("stat-crawl-budget");
+    budgetEl.textContent = `${state.currentDbSizeMb.toFixed(1)}/${state.crawlBudgetMb} MB`;
+    budgetEl.style.color = pctUsed > 90 ? 'var(--danger)' : (pctUsed > 75 ? 'var(--inactive)' : 'var(--accent)');
+    budgetEl.title = `Database size: ${state.currentDbSizeMb.toFixed(1)} MB (${pctUsed.toFixed(1)}% of ${state.crawlBudgetMb} MB budget)`;
+  }
 
   const synced = s.last_synced_at
     ? new Date(s.last_synced_at).toLocaleString()
@@ -580,6 +591,9 @@ async function reconcileOperationStatus() {
     if (status.req_rate !== undefined) state.stats.req_rate = status.req_rate;
     if (status.found_rate !== undefined) state.stats.found_rate = status.found_rate;
     renderStats();
+
+    state.crawlBudgetMb = status.crawl_budget_mb ?? 0;
+    state.currentDbSizeMb = status.current_db_size_mb ?? 0;
 
     if (sync?.status === "running" && status.sync_running && !state.syncing) {
       state.syncing = true;
@@ -969,6 +983,7 @@ const SETTINGS_KEYS = [
   "inactivity_threshold_days",
   "repost_ratio_threshold",
   "feed_sample_size",
+  "bio_keyword_weight",
   // Sync
   "sync_staleness_hours",
   "worker_sweep_interval_seconds",
@@ -996,6 +1011,9 @@ const SETTINGS_KEYS = [
   "clustering_top_n",
   "louvain_max_nodes",
   "louvain_resolution",
+  "community_keywords_node_sample",
+  "community_keywords_staleness_days",
+  "label_prop_max_nodes",
 ];
  
 // Snapshot of values as loaded from the server — used for dirty detection

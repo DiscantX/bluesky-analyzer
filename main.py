@@ -177,6 +177,10 @@ def ensure_sqlite_compat_columns() -> None:
             "clustering_top_n":     "INTEGER NOT NULL DEFAULT 1000",
             "louvain_max_nodes":    "INTEGER NOT NULL DEFAULT 10000",
             "louvain_resolution":   "REAL NOT NULL DEFAULT 1.0",
+            "bio_keyword_weight":               "INTEGER NOT NULL DEFAULT 5",
+            "community_keywords_node_sample":   "INTEGER NOT NULL DEFAULT 100",
+            "community_keywords_staleness_days":"INTEGER NOT NULL DEFAULT 30",
+            "label_prop_max_nodes":             "INTEGER NOT NULL DEFAULT 500000",
         }
 
         columns_gs = {row[1] for row in conn.execute("PRAGMA table_info(global_settings)").fetchall()}
@@ -202,6 +206,10 @@ def ensure_sqlite_compat_columns() -> None:
             "louvain_resolution = 1.0 WHERE louvain_resolution < 0.1 OR louvain_resolution IS NULL",
             "louvain_max_nodes = 10000 WHERE louvain_max_nodes < 1000 OR louvain_max_nodes IS NULL",
             "clustering_top_n = 1000 WHERE clustering_top_n < 100 OR clustering_top_n IS NULL",
+            "bio_keyword_weight = 5 WHERE bio_keyword_weight < 1 OR bio_keyword_weight IS NULL",
+            "community_keywords_node_sample = 100 WHERE community_keywords_node_sample < 10 OR community_keywords_node_sample IS NULL",
+            "community_keywords_staleness_days = 30 WHERE community_keywords_staleness_days < 1 OR community_keywords_staleness_days IS NULL",
+            "label_prop_max_nodes = 500000 WHERE label_prop_max_nodes < 10000 OR label_prop_max_nodes IS NULL",
         ]
         for update in cleanup_updates:
             conn.execute(f"UPDATE global_settings SET {update}")

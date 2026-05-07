@@ -3,16 +3,18 @@ analyzer/crawl.py
 Implements the priority-based graph crawler for network expansion.
 
 OPTIMIZATIONS APPLIED:
-  - Fix 2: Hydration semaphore increased from 2 → 5 (2-5x hydration speedup)
-  - Fix 4: Batch degree recalculation (was N queries per user, now 2 queries per batch)
-  - Fix 6: Parallel follows/followers fetch (concurrent instead of sequential)
+  - Fix 2: Hydration semaphore increased from 2 → 5 (2-5x hydration speedup) [cite: `c:\Users\Admin\Documents\Dylan\APE\bluesky-analyzer\analyzer\.ignore\BOTTLENECK_ANALYSIS.md`]
+  - Fix 4: Batch degree recalculation (was N queries per user, now 2 queries per batch) [cite: `c:\Users\Admin\Documents\Dylan\APE\bluesky-analyzer\analyzer\.ignore\BOTTLENECK_ANALYSIS.md`]
+  - Fix 6: Parallel follows/followers fetch (concurrent instead of sequential) [cite: `c:\Users\Admin\Documents\Dylan\APE\bluesky-analyzer\analyzer\.ignore\BOTTLENECK_ANALYSIS.md`]
 """
 
 import math
 import logging
 import asyncio
 import json
+import os
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 import httpx
 from tortoise.expressions import Q
 from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem
@@ -20,6 +22,7 @@ from db.profile_store import upsert_profile_relationship
 from analyzer.fetch import public_fetch_graph, public_fetch_profiles
 from analyzer.analyze import parse_dt
 from analyzer.metrics import run_graph_analysis
+from main import DB_PATH # Import DB_PATH from main.py
 from settings_cache import settings_cache
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,15 @@ logger = logging.getLogger(__name__)
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
+
+class CrawlBudgetExceeded(Exception):
+    """Custom exception for when the crawl budget is exceeded."""
+    pass
+
+def _get_db_size_mb() -> float:
+    if DB_PATH.exists():
+        return DB_PATH.stat().st_size / (1024 * 1024)
+    return 0.0
 
 def _is_user_expandable(user: AccountRelationship) -> bool:
     if user.crawl_tier > 0:
@@ -212,6 +224,19 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     if seeded:
         logger.info(f"Seeded {seeded} crawl queue items for {owner.alias}")
 
+    # Check budget at the start of processing candidates
+    current_db_size_mb = _get_db_size_mb()
+    crawl_budget_mb = settings_cache.get("crawl_budget_mb", 1024)
+    if current_db_size_mb >= crawl_budget_mb:
+        crawl_run.status = "paused"
+        crawl_run.last_message = f"Crawl paused: Database size ({current_db_size_mb:.1f} MB) exceeds budget ({crawl_budget_mb} MB)."
+        crawl_run.error_message = crawl_run.last_message
+        crawl_run.finished_at = _now()
+        await crawl_run.save(update_fields=["status", "last_message", "error_message", "finished_at"])
+        await emit(crawl_run.last_message, 100)
+        logger.warning(crawl_run.last_message)
+        return
+
     # FIX 2: Hydration semaphore increased from 2 → 5.
     # Hydration is a read-only operation; the conservative limit of 2 was
     # unnecessarily throttling throughput by 2-5x.
@@ -390,6 +415,13 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                         chunk = unique_discovered[i:i + CHUNK]
                         await _batch_update_degrees(owner, chunk, tracked_dids)
 
+                # Check budget after batch degree updates
+                current_db_size_mb = _get_db_size_mb()
+                crawl_budget_mb = settings_cache.get("crawl_budget_mb", 1024)
+                if current_db_size_mb >= crawl_budget_mb:
+                    raise CrawlBudgetExceeded(f"Database size ({current_db_size_mb:.1f} MB) exceeds budget ({crawl_budget_mb} MB).")
+
+
             except Exception as e:
                 logger.exception(f"Failed to expand @{user_profile.handle}: {e}")
                 item.status = "error"
@@ -414,7 +446,20 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             await crawl_run.save(update_fields=["candidates_completed", "request_count", "discovered_count", "last_message"])
    # Process all candidates concurrently using a shared HTTP client
     async with httpx.AsyncClient(timeout=30.0) as public_client:
-        tasks = [process_candidate(item, public_client) for item in candidates]
+        tasks = [process_candidate(item, public_client) for item in candidates] # type: ignore
+        
+        # Wrap gather in a try-except to catch CrawlBudgetExceeded from any concurrent task
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        except CrawlBudgetExceeded as e:
+            crawl_run.status = "paused"
+            crawl_run.last_message = str(e)
+            crawl_run.error_message = str(e)
+            crawl_run.finished_at = _now()
+            await crawl_run.save(update_fields=["status", "last_message", "error_message", "finished_at"])
+            await emit(crawl_run.last_message, 100)
+            logger.warning(crawl_run.last_message)
+            return
         results = await asyncio.gather(*tasks, return_exceptions=True)
         failures = [r for r in results if isinstance(r, Exception)]
         

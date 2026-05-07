@@ -253,11 +253,12 @@ async def generate_community_summaries(owner: SavedAccount, on_progress=None):
             }
         )
 
-async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: int = 100, on_progress=None):
+async def _ensure_community_keywords(owner: SavedAccount, on_progress=None):
     """
     Identifies top N members per community and ensures their top_keywords are populated.
     If keywords are missing or stale, their feeds are re-analyzed.
     """
+    top_n_per_community = settings_cache.get("community_keywords_node_sample", 100)
     logger.info(f"Ensuring top keywords for key community members for {owner.handle}...")
     conn = connections.get("default")
     
@@ -291,8 +292,9 @@ async def _ensure_community_keywords(owner: SavedAccount, top_n_per_community: i
 
     # Determine which profiles need re-analysis
     now = datetime.now(timezone.utc)
-    # Use a fixed staleness for keywords, e.g., 30 days, or if keywords are missing
-    KEYWORD_STALENESS_THRESHOLD = timedelta(days=30) 
+    # Use dynamic staleness for keywords or if keywords are missing
+    staleness_days = settings_cache.get("community_keywords_staleness_days", 30)
+    KEYWORD_STALENESS_THRESHOLD = timedelta(days=staleness_days) 
 
     for member in top_members:
         did = member["did"]
@@ -387,7 +389,7 @@ def _compute_communities(undirected: nx.Graph, resolution: float, node_count: in
         louvain_max = settings_cache.get("louvain_max_nodes", 10000)
         if node_count <= louvain_max:
             return nx.community.louvain_communities(undirected, seed=42, resolution=resolution)
-        elif node_count <= 500000:
+        elif node_count <= settings_cache.get("label_prop_max_nodes", 500000):
             return nx.community.label_propagation_communities(undirected)
         else:
             return nx.connected_components(undirected)

@@ -32,29 +32,19 @@ FEED_SAMPLE_SIZE = 100         # app.bsky.feed.getAuthorFeed max page size
 INACTIVE_DAYS = 90
 REPOST_THRESHOLD = 0.70
 
-# Staleness thresholds for differential syncing
-# High-priority accounts refresh more frequently than low-priority stubs
-STALENESS_THRESHOLDS = {
-    2: timedelta(days=3),    # Tier 2 (full): refresh every 3 days
-    1: timedelta(days=7),    # Tier 1 (standard): refresh every 7 days (default)
-    0: timedelta(days=30),   # Tier 0 (stub): refresh every 30 days
-}
-# Accounts without a crawl_tier default to tier 1 staleness (7 days)
-DEFAULT_STALENESS = STALENESS_THRESHOLDS[1]
-
-
 # ── Progress event helpers ─────────────────────────────────────────────────────
 
 def _evt(kind: str, **kwargs) -> dict:
     return {"kind": kind, "ts": datetime.now(timezone.utc).isoformat(), **kwargs}
 
 
-async def _get_staleness_threshold(rel: AccountRelationship) -> timedelta:
-    """
-    Determine staleness threshold based on crawl_tier.
-    High-priority accounts (tier 2) refresh more frequently.
-    """
-    return STALENESS_THRESHOLDS.get(rel.crawl_tier, DEFAULT_STALENESS)
+def _get_staleness_threshold_days(tier: int) -> int:
+    """Helper to get tier-based staleness from dynamic settings."""
+    if tier == 2:
+        return settings_cache.get("staleness_tier2_days", 3)
+    if tier == 0:
+        return settings_cache.get("staleness_tier0_days", 30)
+    return settings_cache.get("staleness_tier1_days", 7)
 
 
 async def _filter_stale_accounts(
@@ -97,7 +87,7 @@ async def _filter_stale_accounts(
             continue
 
         # Check staleness threshold
-        threshold = STALENESS_THRESHOLDS.get(rel["crawl_tier"], DEFAULT_STALENESS)
+        threshold = timedelta(days=_get_staleness_threshold_days(rel["crawl_tier"]))
         time_since_analysis = now - last_analyzed
 
         # Override staleness if ignore_staleness_threshold_days is set and exceeded
@@ -107,19 +97,22 @@ async def _filter_stale_accounts(
             to_analyze.append(did)
             continue
 
-        if time_since_analysis > threshold:
+        if time_since_analysis >= threshold:
             # Stale — needs refresh
             to_analyze.append(did)
         else:
             # Fresh — can skip
             skipped += 1
 
-    logger.info(
+    log_msg = (
         f"Staleness filter: {len(to_analyze)} to analyze, {skipped} skipped "
-        f"(threshold: tier2={STALENESS_THRESHOLDS[2].days}d, "
-        f"tier1={STALENESS_THRESHOLDS[1].days}d, tier0={STALENESS_THRESHOLDS[0].days}d"
-        f"{f', force_reanalyze_after={settings.ignore_staleness_threshold_days}d' if settings.ignore_staleness_threshold_days > 0 else ''})"
+        f"(thresholds: tier2={settings_cache.get('staleness_tier2_days', 3)}d, "
+        f"tier1={settings_cache.get('staleness_tier1_days', 7)}d, "
+        f"tier0={settings_cache.get('staleness_tier0_days', 30)}d)"
     )
+    if ignore_staleness > 0:
+        log_msg += f" (force_reanalyze_after={ignore_staleness}d)"
+    logger.info(log_msg)
 
     return to_analyze, [d for d in all_dids if d not in to_analyze]
 

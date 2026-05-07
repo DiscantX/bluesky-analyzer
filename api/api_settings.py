@@ -49,6 +49,10 @@ class SettingsSchema(BaseModel):
     clustering_top_n:   int = Field(1000,  ge=100,  le=100000)
     louvain_max_nodes:  int = Field(10000, ge=1000, le=1000000)
     louvain_resolution: float = Field(1.0, ge=0.1, le=10.0)
+    bio_keyword_weight:                 int = Field(5,      ge=1,   le=100)
+    community_keywords_node_sample:     int = Field(100,    ge=10,  le=1000)
+    community_keywords_staleness_days:  int = Field(30,     ge=1,   le=365)
+    label_prop_max_nodes:               int = Field(500000, ge=10000, le=5000000)
 
     class Config:
         from_attributes = True

@@ -11,6 +11,7 @@ import json
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
+from settings_cache import settings_cache
 
 
 # ── Configuration defaults (overridden by settings in main.py) ─────────────────
@@ -204,8 +205,9 @@ def build_tracked_user_data(
     bio_text = getattr(profile, "description", "")
     combined_keywords = Counter(feed_stats.get("keywords", {}))
     bio_keywords = extract_keywords(bio_text)
+    bio_weight = settings_cache.get("bio_keyword_weight", 5)
     for word, count in bio_keywords.items():
-        combined_keywords[word] += (count * 5) # Bio is 5x more indicative of identity
+        combined_keywords[word] += (count * bio_weight) # Bio is N-times more indicative of identity
 
     flags = compute_flags(
         feed_stats, i_follow_them, they_follow_me, inactive_days, repost_threshold

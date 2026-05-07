@@ -36,10 +36,6 @@ SESSION_DIR.mkdir(exist_ok=True)
 # but BskyClient now reads the live setting instead of this value.
 DEFAULT_CONCURRENCY = 5
 
-# Retry config for 429 responses
-MAX_RETRIES = 4
-BASE_BACKOFF = 2.0   # seconds — doubles each retry
-
 
 class RateLimitTracker:
     """
@@ -201,14 +197,17 @@ class BskyClient:
                     status_code = getattr(status, "status_code", None) if status else None
 
                     if status_code == 429:
-                        if retries >= MAX_RETRIES:
+                        max_retries = settings_cache.get("api_max_retries", 4)
+                        if retries >= max_retries:
                             raise
-                        wait = BASE_BACKOFF * (2 ** retries)
+                        
+                        base_backoff = settings_cache.get("api_base_backoff_seconds", 2.0)
+                        wait = base_backoff * (2 ** retries)
                         reset_wait = self.rate_limit.seconds_until_reset
                         wait = max(wait, reset_wait)
                         logger.warning(
-                            f"[{self.alias}] Rate limited (429). "
-                            f"Retrying in {wait:.1f}s (attempt {retries+1}/{MAX_RETRIES})"
+                            f"[{self.alias}] Rate limited (429). Retrying in {wait:.1f}s "
+                            f"(attempt {retries+1}/{max_retries})"
                         )
                         await asyncio.sleep(wait)
                         retries += 1
