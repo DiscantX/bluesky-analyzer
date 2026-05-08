@@ -448,19 +448,21 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     async with httpx.AsyncClient(timeout=30.0) as public_client:
         tasks = [process_candidate(item, public_client) for item in candidates] # type: ignore
         
-        # Wrap gather in a try-except to catch CrawlBudgetExceeded from any concurrent task
-        try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-        except CrawlBudgetExceeded as e:
-            crawl_run.status = "paused"
-            crawl_run.last_message = str(e)
-            crawl_run.error_message = str(e)
-            crawl_run.finished_at = _now()
-            await crawl_run.save(update_fields=["status", "last_message", "error_message", "finished_at"])
-            await emit(crawl_run.last_message, 100)
-            logger.warning(crawl_run.last_message)
-            return
+        # Execute candidates concurrently. Errors are returned in the list.
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Check if any task triggered a budget stop
+        for r in results:
+            if isinstance(r, CrawlBudgetExceeded):
+                crawl_run.status = "paused"
+                crawl_run.last_message = str(r)
+                crawl_run.error_message = str(r)
+                crawl_run.finished_at = _now()
+                await crawl_run.save(update_fields=["status", "last_message", "error_message", "finished_at"])
+                await emit(crawl_run.last_message, 100)
+                logger.warning(crawl_run.last_message)
+                return
+
         failures = [r for r in results if isinstance(r, Exception)]
         
     if failures:
