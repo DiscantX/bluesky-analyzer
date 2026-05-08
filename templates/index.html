@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bluesky Analyzer</title>
   <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/info-panel.css">
 </head>
 <body>
 
@@ -42,6 +43,8 @@
     <div class="progress-fill" id="progress-fill"></div>
   </div>
 </div>
+
+{% include 'partials/_info_panel.html' %}
 
 <!-- ── Stats strip ────────────────────────────────────────────────────────── -->
 <div class="stats-strip">
@@ -198,17 +201,6 @@
 
     <div class="sidebar-label">Logic Blocks</div>
     <div id="builder-root" class="builder-container"></div>
-
-    <!-- Variable Editor Panel -->
-    <div id="variable-editor-panel" style="display: none; margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg2);">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-        <span style="font-weight: bold; font-size: 0.9rem;">Edit Expression: <span id="var-editor-name"></span></span>
-        <button class="btn btn-ghost btn-mini" onclick="closeVariableEditor()">×</button>
-      </div>
-      <div id="variable-expression-display" style="font-family: var(--mono); font-size: 0.8rem; padding: 0.5rem; background: var(--bg); border-radius: 3px; margin-bottom: 0.5rem;"></div>
-      <button class="btn btn-primary btn-mini" onclick="saveVariableEdits()" style="margin-right: 0.5rem;">Save Changes</button>
-      <button class="btn btn-ghost btn-mini" onclick="closeVariableEditor()">Cancel</button>
-    </div>
 
     <div class="modal-actions">
       <button class="btn btn-danger" id="filter-delete-btn" onclick="handleDeleteInBuilder()" style="margin-right: auto; display: none;">Delete</button>
@@ -676,6 +668,9 @@
 <!-- ── Toast container ────────────────────────────────────────────────────── -->
 <div class="toast-wrap" id="toast-wrap"></div>
 
+<script src="/static/js/community-view.js"></script>
+<script src="/static/js/profile-view.js"></script>
+<script src="/static/js/info-panel.js"></script>
 <script src="/static/js/filter-builder.js"></script>
 <script src="/static/js/app.js?v=1.2"></script>
 </body>

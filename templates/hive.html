@@ -3,6 +3,7 @@
 <head>
     <title>Hive Plot: Quality vs Reach - {{ alias }}</title>
     <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/info-panel.css">
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
         body { background: #0f172a; color: #f8fafc; margin: 0; overflow: hidden; font-family: sans-serif; display: block; }
@@ -41,9 +42,14 @@
     <div id="tooltip"></div>
     <svg id="hive-svg"></svg>
 
+    {% include 'partials/_info_panel.html' %}
+
     <script>
-        const ALIAS = "{{ alias }}";
+        const ACTIVE_ALIAS = "{{ alias }}";
     </script>
+    <script src="/static/js/community-view.js"></script>
+    <script src="/static/js/profile-view.js"></script>
+    <script src="/static/js/info-panel.js"></script>
     <script src="/static/js/hive.js"></script>
 </body>
 </html>

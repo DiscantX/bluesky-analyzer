@@ -1,0 +1,126 @@
+/* static/css/info-panel.css */
+
+:root {
+  --info-panel-width: 380px;
+}
+
+/* ── Backdrop ── */
+.info-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+  z-index: 800;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.info-panel-backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ── Main Panel ── */
+.info-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: var(--info-panel-width);
+  height: 100%;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  z-index: 1000;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -15px 0 35px rgba(0, 0, 0, 0.4);
+}
+
+.info-panel.open {
+  transform: translateX(0);
+}
+
+.info-panel-header {
+  padding: 1rem 1.25rem;
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.info-panel-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.8rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0.2rem;
+  transition: color 0.15s;
+}
+
+.info-panel-close:hover {
+  color: var(--text);
+}
+
+.info-panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 1.5rem 2.5rem;
+  scrollbar-width: thin;
+}
+
+/* ── Shared Content Components ── */
+.info-section-label {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted2);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin: 1.8rem 0 0.6rem;
+}
+
+.info-card {
+  background: var(--surface2);
+  padding: 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.info-card-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.info-card-row:last-child { margin-bottom: 0; }
+.info-card-val { color: var(--accent); font-weight: 700; }
+
+/* ── Skeleton / Shimmer ── */
+.shimmer {
+  background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer-anim 1.5s infinite;
+}
+
+@keyframes shimmer-anim {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-header { display: flex; gap: 1rem; align-items: center; }
+.skeleton-avatar { width: 56px; height: 56px; border-radius: 50%; }
+.skeleton-names { flex: 1; }
+.skeleton-line { height: 12px; margin-bottom: 8px; border-radius: 4px; }
+.skeleton-section { border-radius: var(--radius); }
+.skeleton-button { height: 42px; border-radius: var(--radius-sm); }
+
+/* ── Responsive ── */
+@media (max-width: 500px) {
+  :root { --info-panel-width: 100%; }
+  .info-panel { border-left: none; }
+}

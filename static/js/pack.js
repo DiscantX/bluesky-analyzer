@@ -17,7 +17,7 @@
     // ── Fetch data ─────────────────────────────────────────────────────────────
     let data;
     try {
-        const res = await fetch(`/api/graph/${ALIAS}?mode=packing`);
+        const res = await fetch(`/api/graph/${encodeURIComponent(ACTIVE_ALIAS)}?mode=packing`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         data = await res.json();
     } catch (err) {
@@ -81,12 +81,14 @@
         const scale  = Math.min(width, height) / (node.r * 2 + padding);
 
         // Offset to keep node centered in the workspace when sidebar is open
-        const panel = document.getElementById('side-panel');
+        const panel = document.getElementById('info-panel');
         const isPanelOpen = panel && panel.classList.contains('open');
-        // Use fixed width matching CSS for consistent camera centering
-        const panelWidth = isPanelOpen ? 350 : 0;
+        // Use fixed width matching info-panel.css
+        const panelWidth = isPanelOpen ? 380 : 0;
         
-        const tx     = (width - (isPanelOpen ? panelWidth : 0)) / 2 - node.x * scale;
+        // Center the node in the remaining viewport space
+        const availableWidth = width - panelWidth;
+        const tx     = (availableWidth / 2) - node.x * scale;
         const ty     = height / 2 - node.y * scale;
 
         const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
@@ -98,9 +100,16 @@
             g.attr("transform", transform);
         }
 
+        // Listen for panel toggles to re-center active focus
+        if (!window._packPanelListener) {
+            window.addEventListener('infopanel:toggle', () => {
+                if (currentFocus) zoomTo(currentFocus);
+            });
+            window._packPanelListener = true;
+        }
+
         currentFocus = node;
         updateLabelVisibility(node, scale, animated);
-        if (node.depth < 2) closeSidebar();
     }
 
     function updateLabelVisibility(focus, scale, animated = true) {
@@ -188,19 +197,23 @@
             if (d.depth === 1) {
                 if (currentFocus === d) {
                     zoomTo(root);           // already zoomed in → zoom out
+                    if (typeof InfoPanel !== 'undefined') InfoPanel.close();
                 } else {
                     zoomTo(d);             // zoom into community
+                    if (typeof InfoPanel !== 'undefined') InfoPanel.open('community', d.data.id);
                 }
             } else if (d.depth === 2 && d.data) {
-                // Open sidebar FIRST so zoomTo can calculate the correct offset for the open panel
-                if (d.data.did) showProfileSidebar(d.data.did);
-                else if (d.data.handle) showProfileSidebar(d.data.handle);
+                // Use shared InfoPanel logic
+                if (typeof InfoPanel !== 'undefined') InfoPanel.open('profile', d.data.did || d.data.handle);
                 zoomTo(d);
             }
         });
 
     // Background click → zoom out
-    svg.on("click", () => zoomTo(root));
+    svg.on("click", () => {
+        zoomTo(root);
+        if (typeof InfoPanel !== 'undefined') InfoPanel.close();
+    });
 
     // ── Draw labels ────────────────────────────────────────────────────────────
     const label = g.selectAll("g.label")
@@ -309,70 +322,6 @@
         });
     });
 
-    // ── Sidebar Helpers ────────────────────────────────────────────────────────
-    async function showProfileSidebar(did) {
-        const panel = document.getElementById('side-panel');
-        const content = document.getElementById('panel-content');
-        if (!panel || !content) return;
-
-        // Fallback for alias variable naming inconsistency
-        const currentAlias = (typeof ALIAS !== 'undefined' && ALIAS) ? ALIAS : 
-                            (typeof ACTIVE_ALIAS !== 'undefined' && ACTIVE_ALIAS) ? ACTIVE_ALIAS : 
-                            window.location.pathname.split('/').pop();
-        
-        if (!currentAlias) return;
-
-        panel.classList.add('open');
-        content.innerHTML = `<div class="state-box">Loading profile...</div>`;
-
-        try {
-            const filter = did.startsWith('did:') ? { field: "did", op: "eq", value: did } : { field: "handle", op: "eq", value: did };
-            const res = await fetch(`/api/users/${currentAlias}?limit=1&filter_tree=${JSON.stringify({ op: "AND", conditions: [filter] })}`);
-            const result = await res.json();
-            const u = result.users[0];
-            if (!u) { content.innerHTML = `<div class="state-box">Profile not in DB.</div>`; return; }
-
-            content.innerHTML = `
-                <div style="padding: 1rem; color: var(--text);">
-                    <div style="display:flex; gap:1rem; align-items:center; margin-bottom:1.5rem;">
-                        ${u.avatar_url ? `<img src="${u.avatar_url}" style="width:56px; height:56px; border-radius:50%; border:1px solid var(--border);">` : `<div class="avatar-placeholder" style="width:56px; height:56px;">${(u.display_name || u.handle || 'U')[0].toUpperCase()}</div>`}
-                        <div style="overflow:hidden;">
-                            <div style="font-weight:800; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; font-size:1.1rem;">${u.display_name || '—'}</div>
-                            <div style="font-family:var(--mono); font-size:0.75rem; color:var(--accent);">@${u.handle}</div>
-                        </div>
-                    </div>
-
-                    <div class="sidebar-label">Network Position</div>
-                    <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.75rem; margin-bottom:1.5rem; border: 1px solid var(--border);">
-                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>FlowRank</span><span style="color:var(--accent); font-weight:bold;">${(u.flowrank_score * 1000).toFixed(4)}</span></div>
-                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>Community</span><span style="color:var(--accent2);">${u.comm_name || '#' + (u.community_id ?? '—')}</span></div>
-                        <div style="display:flex; justify-content:space-between;"><span>Followers</span><span>${(u.followers_count || 0).toLocaleString()}</span></div>
-                    </div>
-
-                    <div class="sidebar-label">Activity Signals</div>
-                    <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.75rem; margin-bottom:1.5rem; border: 1px solid var(--border);">
-                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>Repost Ratio</span><span>${(u.repost_ratio * 100).toFixed(1)}%</span></div>
-                        <div style="display:flex; justify-content:space-between; margin-bottom:6px;"><span>Last Post</span><span>${u.days_since_post != null ? u.days_since_post + 'd ago' : '—'}</span></div>
-                        <div style="display:flex; justify-content:space-between;"><span>Interacted</span><span style="color:${u.interacted_with_owner ? 'var(--accent2)' : 'var(--muted)'}; font-weight:bold;">${u.interacted_with_owner ? 'YES' : 'NO'}</span></div>
-                    </div>
-
-                    <div style="display:flex; gap:0.5rem; margin-top:1.5rem;">
-                        <a href="https://bsky.app/profile/${u.did}" target="_blank" class="btn btn-primary" style="flex:1; justify-content:center; text-decoration:none; font-weight: 700;">Open in Bluesky</a>
-                    </div>
-                </div>
-            `;
-        } catch (err) {
-            content.innerHTML = `<div class="state-box" style="color:var(--danger)">Failed to fetch profile.</div>`;
-        }
-    }
-
-    function closeSidebar() {
-        const panel = document.getElementById('side-panel');
-        if (panel) panel.classList.remove('open');
-    }
-
-    // Expose closeSidebar globally so it can be called from HTML onclick
-    window.closeSidebar = closeSidebar;
 
     // ── Tooltip ────────────────────────────────────────────────────────────────
     const tooltip = d3.select("#pack-tooltip");

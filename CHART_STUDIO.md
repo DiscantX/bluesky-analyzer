@@ -735,15 +735,16 @@ The legacy templates (`graph.html`, `hive.html`, `pack.html`) and their JS files
 
 ## 11. Implementation Phases
 
-### Phase 0 — Shared Profile Panel
-*Implemented independently by developer.*
+### Phase 0 — Shared InfoPanel System (COMPLETE)
+*Implemented as a decoupled orchestrator and renderer system.*
 
-- Extract side panel into `profile-panel.js`
-- Migrate `graph.js` and `pack.js` to use it
-- Main dashboard list rows open side panel on click instead of navigating directly
-- All pages adopt the same `#side-panel` HTML structure
+- **Architecture:** Created a shared orchestrator (`info-panel.js`) that manages panel state, backdrop interactions, and a capped `Map` cache (50 entries) for performance.
+- **Modularity:** Content is rendered via a "Registry" pattern using `profile-view.js` and `community-view.js`.
+- **Integration:** Migrated the Dashboard, Force-Directed Graph, Hive Plot, and Circle Packing to use the shared system.
+- **Layout Sync:** Implemented a custom event system (`infopanel:toggle`) that allows D3 and Canvas-based charts to dynamically re-center their camera focus when the sidebar occupies viewport space.
+- **Universal Triggers:** Established global CSS classes (`js-profile-trigger`, `js-community-trigger`) to intercept clicks across all list views and injected content.
 
-**Completion criteria:** Clicking any account anywhere opens the same profile card. No page navigates directly to Bluesky — all navigation goes through the panel.
+**Completion criteria:** Clicking any account or community anywhere opens the shared InfoPanel. No page navigates directly to Bluesky — all external navigation is contextualized through the panel.
 
 ---
 
