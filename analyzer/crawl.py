@@ -498,30 +498,35 @@ async def enqueue_crawl_user(owner: SavedAccount, user: AccountRelationship) -> 
         return False
 
     priority = await calculate_priority(user)
-    existing = await CrawlQueueItem.filter(account=owner, did=user.did).first()
     profile = await user.profile
-    if existing:
-        existing.relationship = user
-        existing.handle = profile.handle
-        existing.priority = priority
-        existing.tier = user.crawl_tier
-        if existing.status in ("error", "skipped"):
-            existing.status = "pending"
-            existing.last_error = None
-            existing.completed_at = None
-            existing.cursor = None
-        await existing.save()
+
+    # Use get_or_create to handle potential race conditions atomically
+    queue_item, created = await CrawlQueueItem.get_or_create(
+        account=owner,
+        did=user.did,
+        defaults={
+            "relationship": user,
+            "handle": profile.handle,
+            "priority": priority,
+            "tier": user.crawl_tier,
+            "status": "pending",
+        }
+    )
+
+    if not created:
+        # If the item already existed, update its fields to refresh priority/metadata
+        queue_item.relationship = user
+        queue_item.handle = profile.handle
+        queue_item.priority = priority
+        queue_item.tier = user.crawl_tier
+        if queue_item.status in ("error", "skipped"):
+            queue_item.status = "pending"
+            queue_item.last_error = None
+            queue_item.completed_at = None
+            queue_item.cursor = None
+        await queue_item.save()
         return False
 
-    await CrawlQueueItem.create(
-        account=owner,
-        relationship=user,
-        did=user.did,
-        handle=profile.handle,
-        priority=priority,
-        tier=user.crawl_tier,
-        status="pending",
-    )
     return True
 
 
