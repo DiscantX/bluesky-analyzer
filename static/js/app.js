@@ -165,13 +165,13 @@ function userRow(u) {
   const groupLabel = u.comm_name || (u.community_id != null ? u.community_id : "—");
   const groupTitle = u.comm_name ? `Group: ${u.comm_name} (#${u.community_id})` : "Community ID";
   return `
-    <a class="user-row" href="${u.profile_url}" target="_blank" rel="noopener">
+    <div class="user-row js-profile-trigger" data-did="${u.did}" style="cursor:pointer">
       <div class="user-grid">
         ${avatar(u)}
         <div class="user-name" title="${u.display_name}" style="min-width:0">${u.display_name || "—"}</div>
         <div class="user-handle" title="${u.handle}" style="min-width:0">@${u.handle}</div>
         <div class="col-stat" title="FlowRank Influence">💎 ${u.flowrank_score > 0 ? (u.flowrank_score * 1000).toFixed(4) : "—"}</div>
-        <div class="col-stat" title="${groupTitle}">🌐 ${groupLabel}</div>
+        <div class="col-stat js-community-trigger" data-id="${u.community_id}" title="${groupTitle}" style="cursor:pointer">🌐 ${groupLabel}</div>
         <div class="col-stat">${fmt(u.followers_count)}</div>
         <div class="col-stat">${fmt(u.follows_count)}</div>
         <div class="col-stat">${u.days_since_post != null ? u.days_since_post + "d" : "—"}</div>
@@ -184,7 +184,7 @@ function userRow(u) {
         <div class="col-date">${shortDate(u.last_analyzed_at)}</div>
       </div>
       <div class="badges-row">${badges(u)}</div>
-    </a>`;
+    </div>`;
 }
 
 function shortDate(iso) {
@@ -230,6 +230,12 @@ function renderStats() {
 function renderNav() {
   const s   = state.stats;
   const nav = el("nav-items");
+  
+  let extraNav = "";
+  if (state.activeTab === "custom-community") {
+    extraNav = `<div class="nav-item active"><span>🔍</span><span>Filtered View</span></div>`;
+  }
+
   nav.innerHTML = TABS.map(tab => {
     const count  = s[tab.statKey] ?? "";
     const active = state.activeTab === tab.id ? "active" : "";
@@ -239,15 +245,15 @@ function renderNav() {
         <span>${tab.label}</span>
         ${count !== "" ? `<span class="nav-count">${fmt(count)}</span>` : ""}
       </div>`;
-  }).join("") + `
+  }).join("") + extraNav + `
     <div class="sidebar-label" style="margin-top: 1rem;">Visualization</div>
-    <a class="nav-item" href="/graph/${state.activeAlias || ""}" style="text-decoration:none;">
+    <a class="nav-item" href="/graph/${encodeURIComponent(state.activeAlias || "")}" style="text-decoration:none;">
       <span>🕸️</span><span>Network Graph</span>
     </a>
-    <a class="nav-item" href="/hive/${state.activeAlias || ""}" style="text-decoration:none;">
+    <a class="nav-item" href="/hive/${encodeURIComponent(state.activeAlias || "")}" style="text-decoration:none;">
       <span>🍯</span><span>Hive Plot</span>
     </a>
-    <a class="nav-item" href="/pack/${state.activeAlias || ""}" style="text-decoration:none;">
+    <a class="nav-item" href="/pack/${encodeURIComponent(state.activeAlias || "")}" style="text-decoration:none;">
       <span>⭕</span><span>Circle Packing</span>
     </a>
   `;
@@ -931,7 +937,22 @@ document.addEventListener("DOMContentLoaded", () => {
     onVariablesChanged: () => { /* FilterBuilder renders variable list internally */ },
   });
 
+  // Initialize shared sidebar
+  if (typeof InfoPanel !== 'undefined') InfoPanel.init();
+
   loadAccounts();
   startStatusWatcher();
   initLazyLoading();
+
+  // Check for redirected community filters from graph pages
+  const params = new URLSearchParams(window.location.search);
+  const communityId = params.get('filter_community');
+  if (communityId) {
+      // Use a brief timeout to ensure loadAccounts/switchAccount initial setup is underway
+      setTimeout(() => {
+          window.filterByCommunity(communityId);
+          // Clean up the URL to prevent re-filtering on manual page refreshes
+          window.history.replaceState({}, document.title, window.location.pathname);
+      }, 600);
+  }
 });

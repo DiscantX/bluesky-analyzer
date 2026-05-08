@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Network Graph | Bluesky Analyzer</title>
   <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/info-panel.css">
   <script src="https://unpkg.com/force-graph"></script>
   <style>
     body { overflow: hidden; margin: 0; background: #0c0e14; }
@@ -30,41 +31,6 @@
         font-family: var(--mono);
         font-size: 0.7rem;
         pointer-events: none;
-    }
-    .graph-side-panel {
-      position: absolute;
-      top: 1rem;
-      right: 1rem;
-      bottom: 1rem;
-      width: 320px;
-      background: rgba(19, 22, 31, 0.95);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      z-index: 20;
-      display: flex;
-      flex-direction: column;
-      transform: translateX(calc(100% + 2rem));
-      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      pointer-events: all;
-      overflow-y: auto;
-      box-shadow: -10px 0 30px rgba(0,0,0,0.5);
-    }
-    .graph-side-panel.open {
-      transform: translateX(0);
-    }
-    .panel-header {
-      padding: 1rem;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .close-btn {
-      background: transparent;
-      border: none;
-      color: var(--muted);
-      font-size: 1.5rem;
-      cursor: pointer;
     }
   </style>
 </head>
@@ -93,17 +59,14 @@
   Nodes: -- | Links: --
 </div>
 
-<div class="graph-side-panel" id="side-panel">
-  <div class="panel-header">
-    <div class="sidebar-label" style="padding:0">Profile Details</div>
-    <button class="close-btn" onclick="deselectNode()">&times;</button>
-  </div>
-  <div id="panel-content"></div>
-</div>
+{% include 'partials/_info_panel.html' %}
 
 <div id="graph-container"></div>
 
 <script>const ACTIVE_ALIAS = "{{ alias }}";</script>
+<script src="/static/js/community-view.js"></script>
+<script src="/static/js/profile-view.js"></script>
+<script src="/static/js/info-panel.js"></script>
 <script src="/static/js/graph.js"></script>
 </body>
 </html>

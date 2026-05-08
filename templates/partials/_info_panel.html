@@ -1,0 +1,24 @@
+<!-- templates/partials/_info_panel.html -->
+<div class="info-panel-backdrop" id="info-panel-backdrop" onclick="InfoPanel.close()"></div>
+
+<aside class="info-panel" id="info-panel">
+  <div class="info-panel-header">
+    <button class="info-panel-close" onclick="InfoPanel.close()" aria-label="Close panel">×</button>
+  </div>
+
+  <div class="info-panel-content" id="info-panel-content">
+    <!-- Skeleton state shown while loading -->
+    <div class="info-panel-skeleton">
+      <div class="skeleton-header">
+        <div class="skeleton-avatar shimmer"></div>
+        <div class="skeleton-names">
+          <div class="skeleton-line shimmer" style="width: 60%"></div>
+          <div class="skeleton-line shimmer" style="width: 40%"></div>
+        </div>
+      </div>
+      <div class="skeleton-section shimmer" style="height: 100px; margin-top: 2rem;"></div>
+      <div class="skeleton-section shimmer" style="height: 80px; margin-top: 1rem;"></div>
+      <div class="skeleton-button shimmer" style="margin-top: 2.5rem;"></div>
+    </div>
+  </div>
+</aside>

@@ -41,7 +41,7 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
       hiveBtn.id = 'hive-view-link';
       hiveBtn.className = 'btn btn-ghost';
       hiveBtn.innerHTML = '<span>🍯</span> Hive Plot';
-      hiveBtn.onclick = () => location.href = `/hive/${ACTIVE_ALIAS}`;
+      hiveBtn.onclick = () => location.href = `/hive/${encodeURIComponent(ACTIVE_ALIAS)}`;
       hiveBtn.style.marginLeft = '0.5rem';
       if (resetBtn && resetBtn.parentNode) resetBtn.parentNode.appendChild(hiveBtn);
   }
@@ -55,7 +55,7 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
   try {
     statusEl.textContent = mode === 'macro' ? 'Fetching global network...' : 'Fetching neighborhood...';
     
-    const url = new URL(`/api/graph/${ACTIVE_ALIAS}`, window.location.origin);
+    const url = new URL(`/api/graph/${encodeURIComponent(ACTIVE_ALIAS)}`, window.location.origin);
     url.searchParams.set('mode', mode);
     
     // Adjust limit based on mode
@@ -226,7 +226,10 @@ async function loadGraphData(mode = 'macro', seedDid = null, communityId = null,
         lastClickedNode = node;
       })
       .onNodeRightClick(node => {
-         window.open(`https://bsky.app/profile/${node.did}`, '_blank');
+         // Migrate direct links to InfoPanel system
+         if (typeof InfoPanel !== 'undefined' && node.did) {
+             InfoPanel.open('profile', node.did);
+         }
       })
       .onBackgroundClick(deselectNode);
 
@@ -285,8 +288,15 @@ async function handleNodeSelection(node) {
     selectedNode = node;
     neighbors = new Set(node.neighbors || []);
     
-    // Open panel first so we can calculate the correct unoccluded offset
-    showNodeDetails(node);
+    // Use modular InfoPanel
+    if (typeof InfoPanel !== 'undefined') {
+        if (node.type === 'community_meta') {
+            const rawId = node.id.toString().replace('comm-', '');
+            InfoPanel.open('community', rawId);
+        } else if (node.did) {
+            InfoPanel.open('profile', node.did);
+        }
+    }
     
     centerOnNode(node, true);
     
@@ -307,14 +317,12 @@ function centerOnNode(node, animate = true) {
     // During simulation tracking, respect the user's current zoom level to allow manual scrolling.
     const targetZoom = animate ? 4 : currentZoom;
     
-    // Calculate visual offset: If panel is on the right, shift camera focus to the right
-    // to keep the node centered in the left-hand workspace.
-    const panel = document.getElementById('side-panel');
-    
-    // Fallback to 350px (standard sidebar width) if panel is open but width isn't yet rendered
+    // Calculate visual offset: account for InfoPanel width if open
+    const panel = document.getElementById('info-panel');
     const isPanelOpen = panel && panel.classList.contains('open');
-    const panelWidth = isPanelOpen ? (panel.offsetWidth || 350) : 0;
-    
+    // info-panel.css uses 380px width
+    const panelWidth = isPanelOpen ? (panel.offsetWidth || 380) : 0;
+
     const offset = (panelWidth / 2) / targetZoom;
 
     if (animate) graph.zoom(targetZoom, duration);
@@ -324,114 +332,8 @@ function centerOnNode(node, animate = true) {
 function deselectNode() {
     selectedNode = null;
     neighbors.clear();
-    const panel = document.getElementById('side-panel');
-    if (panel) panel.classList.remove('open');
+    if (typeof InfoPanel !== 'undefined') InfoPanel.close();
     if (graph) graph.nodeRelSize(CONFIG.nodeRelSize);
-}
-
-async function showNodeDetails(node) {
-    const panel = document.getElementById('side-panel');
-    const content = document.getElementById('panel-content');
-    panel.classList.add('open');
-    
-    if (node.type === 'community_meta') {
-        const rawId = node.id.toString().replace('comm-', '');
-        
-        let keywordHtml = '—';
-        if (node.top_keywords) {
-            try {
-                const kws = typeof node.top_keywords === 'string' ? JSON.parse(node.top_keywords) : node.top_keywords;
-                keywordHtml = Object.entries(kws)
-                    .sort((a, b) => b[1] - a[1])
-                    .map(([word]) => `<span class="badge" style="margin: 2px; background: var(--surface2); border: 1px solid var(--border); font-size: 0.7rem;">${word}</span>`)
-                    .join('');
-            } catch (e) { console.error("Error parsing keywords", e); }
-        }
-
-        let membersHtml = '—';
-        if (node.representative_members) {
-            try {
-                const members = typeof node.representative_members === 'string' ? JSON.parse(node.representative_members) : node.representative_members;
-                membersHtml = members.map(m => `<div style="font-size: 0.75rem; color: var(--accent); margin-bottom: 2px;">${m}</div>`).join('');
-            } catch (e) { console.error("Error parsing members", e); }
-        }
-
-        content.innerHTML = `
-            <div style="padding: 1rem;">
-                <div style="margin-bottom: 1.5rem;">
-                    <div style="font-size: 1.2rem; font-weight: 800; color: var(--accent2); margin-bottom: 0.25rem;">${node.name || `Community ${rawId}`}</div>
-                    <div style="font-style: italic; font-size: 0.85rem; color: var(--muted); line-height: 1.4;">${node.description || 'No description available for this cluster.'}</div>
-                </div>
-
-                <div class="sidebar-label">Cluster Metrics</div>
-                <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.7rem; margin-bottom:1.5rem;">
-                    <div style="display:flex; justify-content:space-between;"><span>Total Members</span><span style="color:var(--accent); font-weight: bold;">${fmt(node.member_count)}</span></div>
-                    <div style="display:flex; justify-content:space-between;"><span>Avg Influence</span><span style="color:var(--accent); font-weight: bold;">${(node.avg_rank * 1000).toFixed(4)}</span></div>
-                </div>
-
-                <div class="sidebar-label">Top Keywords</div>
-                <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 1.5rem;">
-                    ${keywordHtml}
-                </div>
-
-                <div class="sidebar-label">Representative Figures</div>
-                <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; margin-bottom:1.5rem;">
-                    ${membersHtml}
-                </div>
-
-                <div class="state-box" style="font-size: 0.7rem; border-style: dashed; opacity: 0.8;">
-                    Double-click the sphere in the network to shatter this meta-node into individual profiles.
-                </div>
-            </div>
-        `;
-        return;
-    }
-
-    content.innerHTML = `<div class="state-box">Loading profile...</div>`;
-    
-    try {
-        const params = new URLSearchParams();
-        params.set('limit', '1');
-        params.set('filter_tree', JSON.stringify({ op: "AND", conditions: [{ field: "did", op: "eq", value: node.did }] }));
-
-        const response = await fetch(`/api/users/${ACTIVE_ALIAS}?${params.toString()}`);
-        const result = await response.json();
-        const u = result.users[0];
-        
-        if (!u) { content.innerHTML = `<div class="state-box">Profile not in DB.</div>`; return; }
-
-        content.innerHTML = `
-            <div style="padding: 1rem;">
-                <div style="display:flex; gap:1rem; align-items:center; margin-bottom:1.5rem;">
-                    ${u.avatar_url ? `<img src="${u.avatar_url}" style="width:56px; height:56px; border-radius:50%; border:1px solid var(--border);">` : `<div class="avatar-placeholder" style="width:56px; height:56px;">${u.handle[0].toUpperCase()}</div>`}
-                    <div style="overflow:hidden;">
-                        <div style="font-weight:800; white-space:nowrap; text-overflow:ellipsis; overflow:hidden;">${u.display_name || '—'}</div>
-                        <div style="font-family:var(--mono); font-size:0.75rem; color:var(--accent);">@${u.handle}</div>
-                    </div>
-                </div>
-
-                <div class="sidebar-label">Network Position</div>
-                <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.7rem; margin-bottom:1rem;">
-                    <div style="display:flex; justify-content:space-between;"><span>FlowRank</span><span style="color:var(--accent);">${(u.flowrank_score * 1000).toFixed(4)}</span></div>
-                    <div style="display:flex; justify-content:space-between;"><span>Community</span><span style="color:var(--accent2);" title="${u.comm_name || ''}">${u.comm_name || '#' + (u.community_id ?? '—')}</span></div>
-                    <div style="display:flex; justify-content:space-between;"><span>In-Degree</span><span>${u.in_subgraph_degree}</span></div>
-                </div>
-
-                <div class="sidebar-label">Activity Signals</div>
-                <div style="background:var(--surface2); padding:0.75rem; border-radius:4px; font-family:var(--mono); font-size:0.7rem; margin-bottom:1rem;">
-                    <div style="display:flex; justify-content:space-between;"><span>Repost Ratio</span><span>${(u.repost_ratio * 100).toFixed(1)}%</span></div>
-                    <div style="display:flex; justify-content:space-between;"><span>Last Post</span><span>${u.days_since_post != null ? u.days_since_post + 'd ago' : '—'}</span></div>
-                    <div style="display:flex; justify-content:space-between;"><span>Interacted</span><span style="color:${u.interacted_with_owner ? 'var(--repost)' : 'var(--muted)'};">${u.interacted_with_owner ? 'YES' : 'NO'}</span></div>
-                </div>
-
-                <div style="display:flex; gap:0.5rem; margin-top:2rem;">
-                    <a href="https://bsky.app/profile/${u.did}" target="_blank" class="btn btn-primary" style="flex:1; justify-content:center;">Open in Bluesky</a>
-                </div>
-            </div>
-        `;
-    } catch (err) {
-        content.innerHTML = `<div class="state-box" style="color:var(--danger)">Failed to fetch profile.</div>`;
-    }
 }
 
 // UI functions for navigation
@@ -457,6 +359,24 @@ function toggleParticles(enabled) {
 document.addEventListener('DOMContentLoaded', () => {
     // Initial load: start with macro view
     loadGraphData('macro');
+
+    // Sync graph state with InfoPanel events
+    if (!window._graphPanelListener) {
+        window.addEventListener('infopanel:toggle', (e) => {
+            if (!e.detail.open) {
+                // If panel was closed via close button or backdrop, clear selection
+                if (selectedNode) {
+                    selectedNode = null;
+                    neighbors.clear();
+                    if (graph) graph.nodeRelSize(CONFIG.nodeRelSize);
+                }
+            } else if (selectedNode) {
+                // Panel opened, re-center focus area
+                centerOnNode(selectedNode, true);
+            }
+        });
+        window._graphPanelListener = true;
+    }
 });
 
 window.addEventListener('resize', () => graph && graph.width(window.innerWidth).height(window.innerHeight));
