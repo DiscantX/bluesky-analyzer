@@ -13,7 +13,10 @@
 <!-- Top bar -->
 <header class="studio-topbar">
   <a href="/charts/{{ alias }}" class="btn btn-ghost btn-sm">← Charts</a>
-  <input type="text" id="chart-name" class="studio-name-input" placeholder="Untitled Chart" value="{{ chart_name }}">
+  <input type="text" id="chart-name" class="studio-name-input"
+         placeholder="Untitled Chart" value="{{ chart_name }}">
+  <input type="text" id="chart-icon" class="studio-icon-input"
+         maxlength="2" placeholder="📊" style="width:42px;font-size:1rem;text-align:center;">
   <div class="topbar-sep"></div>
   <span class="studio-dirty-hint" id="dirty-hint"></span>
   <button class="btn btn-ghost btn-sm" onclick="discardChanges()">Discard</button>
@@ -23,41 +26,84 @@
 <div class="studio-layout">
 
   <!-- ── Builder panel ──────────────────────────────────────────────────── -->
-  <aside class="studio-sidebar">
+  <aside class="studio-sidebar" id="studio-sidebar">
+
+    <!-- Chart type -->
     <div class="studio-section">
       <label class="studio-label">Chart Type</label>
       <div id="type-picker" class="type-picker-grid"></div>
     </div>
 
-    <div class="studio-section">
-      <label class="studio-label">Icon</label>
-      <input type="text" id="chart-icon" class="studio-icon-input" maxlength="2" placeholder="📊">
-    </div>
-
-    <div class="studio-section">
-      <label class="studio-label">Data Filter</label>
-      <select id="filter-select" class="sort-select" style="width:100%">
-        <option value="">All accounts</option>
-      </select>
-      <div id="filter-tree-badge" style="display:none;margin-top:0.4rem;font-family:var(--mono);font-size:0.68rem;color:var(--accent2);padding:0.25rem 0.5rem;background:rgba(167,139,250,0.1);border-radius:4px;border:1px solid rgba(167,139,250,0.3)">
-        Custom filter active
-      </div>
-    </div>
-
+    <!-- Dimensions -->
     <div class="studio-section" id="dimensions-section">
       <label class="studio-label">Dimensions</label>
       <div id="dimension-rows"></div>
     </div>
 
+    <!-- 3D-specific options panel (shown only for force_directed_3d) -->
+    <div class="studio-section" id="options-3d-section" style="display:none;">
+      <label class="studio-label">3D Options</label>
+
+      <div class="studio-option-row">
+        <span>Projection</span>
+        <select id="opt-projection" class="sort-select" style="width:130px">
+          <option value="3d">Full 3D (orbit)</option>
+          <option value="2d">2D Projection</option>
+        </select>
+      </div>
+
+      <div class="studio-option-row">
+        <span>Show Labels</span>
+        <label class="toggle-wrap">
+          <input type="checkbox" id="opt-show-labels" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="studio-option-row">
+        <span>Particle Speed</span>
+        <input type="range" id="opt-particle-speed" min="0" max="0.05" step="0.001"
+               value="0.005" style="width:90px; accent-color:var(--accent)">
+        <span id="opt-particle-speed-val" style="font-family:var(--mono);font-size:0.68rem;
+              color:var(--muted);width:36px;text-align:right;">0.005</span>
+      </div>
+    </div>
+
+    <!-- Filter -->
+    <div class="studio-section">
+      <label class="studio-label" style="display:flex;justify-content:space-between;align-items:center;">
+        Data Filter
+        <button class="btn btn-ghost btn-sm" style="padding:0.15rem 0.4rem;font-size:0.65rem;"
+                onclick="openFilterPanel()" id="filter-edit-btn">+ Add</button>
+      </label>
+
+      <!-- Saved filter dropdown -->
+      <select id="filter-select" class="sort-select" style="width:100%;margin-bottom:0.4rem;"
+              onchange="onFilterSelectChange(this.value)">
+        <option value="">All accounts</option>
+        <option value="__custom__">── Custom filter ──</option>
+      </select>
+
+      <!-- Inline filter tree badge (shown when custom tree is active) -->
+      <div id="filter-tree-badge" style="display:none;
+           font-family:var(--mono);font-size:0.68rem;color:var(--accent2);
+           padding:0.3rem 0.6rem;background:rgba(167,139,250,0.08);
+           border:1px solid rgba(167,139,250,0.3);border-radius:4px;
+           display:flex;justify-content:space-between;align-items:center;">
+        <span>Custom filter active</span>
+        <button onclick="clearInlineFilter()" style="background:none;border:none;
+                color:var(--muted);cursor:pointer;font-size:0.85rem;padding:0;">×</button>
+      </div>
+    </div>
+
+    <!-- Aggregation + limit + sort -->
     <div class="studio-section">
       <label class="studio-label">Options</label>
-      <div class="studio-option-row">
-        <span>Limit</span>
-        <input type="number" id="opt-limit" class="setting-input" style="width:80px" min="10" max="10000" value="2000">
-      </div>
+
       <div class="studio-option-row" id="agg-row" style="display:none">
         <span>Aggregation</span>
-        <select id="opt-agg" class="sort-select">
+        <select id="opt-agg" class="sort-select" style="width:100px"
+                onchange="onOptionChange()">
           <option value="avg">Average</option>
           <option value="sum">Sum</option>
           <option value="count">Count</option>
@@ -65,57 +111,118 @@
           <option value="min">Min</option>
         </select>
       </div>
+
+      <div class="studio-option-row">
+        <span>Limit</span>
+        <input type="number" id="opt-limit" class="setting-input" style="width:80px"
+               min="10" max="10000" value="2000" oninput="onOptionChange()">
+      </div>
+
       <div class="studio-option-row">
         <span>Sort</span>
-        <select id="opt-sort-dir" class="sort-select" style="width:100px">
+        <select id="opt-sort-dir" class="sort-select" style="width:110px"
+                onchange="onOptionChange()">
           <option value="desc">Descending</option>
           <option value="asc">Ascending</option>
         </select>
       </div>
     </div>
+
   </aside>
 
   <!-- ── Preview panel ──────────────────────────────────────────────────── -->
   <section class="studio-preview">
     <div class="studio-preview-toolbar">
-      <span id="preview-meta" style="font-family:var(--mono);font-size:0.72rem;color:var(--muted)">–</span>
-      <button class="btn btn-ghost btn-sm" onclick="refreshPreview()" title="Refresh preview">↺ Refresh</button>
+      <span id="preview-meta"
+            style="font-family:var(--mono);font-size:0.72rem;color:var(--muted)">–</span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshPreview()">↺ Refresh</button>
     </div>
     <div id="preview-container" class="studio-preview-canvas">
       <div class="state-box">Configure a chart type and dimensions to see a preview.</div>
     </div>
   </section>
 
+</div><!-- /.studio-layout -->
+
+<!-- ── Inline filter modal (reuses existing filter-builder) ────────────── -->
+<div class="modal-backdrop" id="filter-panel-modal"
+     onclick="if(event.target===this)closeFilterPanel()">
+  <div class="modal" style="max-width:680px;width:95%;">
+    <div class="modal-title">Filter — Chart Data</div>
+
+    <div class="field">
+      <label>Saved Filters</label>
+      <select id="filter-panel-saved" class="sort-select" style="width:100%"
+              onchange="onFilterPanelSavedChange(this.value)">
+        <option value="">None (all accounts)</option>
+      </select>
+    </div>
+
+    <div class="sidebar-label" style="margin-top:1rem;">
+      — or build a custom condition tree —
+    </div>
+
+    <div id="filter-panel-builder-root" class="builder-container"
+         style="margin-top:0.5rem;"></div>
+
+    <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+      <button class="btn btn-ghost btn-mini"
+              onclick="addRuleToPanel('filter-panel-builder-root-id')">+ Rule</button>
+      <button class="btn btn-ghost btn-mini"
+              onclick="addMathExpressionRuleToPanel()">+ Math</button>
+      <button class="btn btn-ghost btn-mini"
+              onclick="addGroupToPanel('filter-panel-builder-root-id')">+ Group</button>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="clearInlineFilter();closeFilterPanel()">Clear Filter</button>
+      <button class="btn btn-ghost" onclick="closeFilterPanel()">Cancel</button>
+      <button class="btn btn-primary" onclick="applyFilterPanel()">Apply Filter</button>
+    </div>
+  </div>
 </div>
 
+<!-- Script bootstrap -->
 <script>
-const ALIAS      = {{ alias | tojson }};
-const CHART_ID   = {{ chart_id | tojson }};
-const INITIAL    = {{ initial_data | tojson }};
+const ALIAS    = {{ alias | tojson }};
+const CHART_ID = {{ chart_id | tojson }};
+const INITIAL  = {{ initial_data | tojson }};
 
-let registry    = {};
-let filterSets  = [];
-let chartDef    = {
-  name:        INITIAL.name        || 'Untitled Chart',
-  icon:        INITIAL.icon        || '📊',
-  chart_type:  INITIAL.chart_type  || 'scatter',
-  dimensions:  INITIAL.dimensions  || {},
-  filter_tree: INITIAL.filter_tree || null,
+// ── State ──────────────────────────────────────────────────────────────────
+let registry   = {};
+let filterSets = [];
+
+let chartDef = {
+  name:          INITIAL.name        || 'Untitled Chart',
+  icon:          INITIAL.icon        || '📊',
+  chart_type:    INITIAL.chart_type  || 'scatter',
+  dimensions:    INITIAL.dimensions  || {},
+  filter_tree:   INITIAL.filter_tree || null,
   filter_set_id: INITIAL.filter_set_id || null,
-  aggregation: INITIAL.aggregation || 'avg',
-  limit:       INITIAL.limit       || 2000,
-  sort_by:     INITIAL.sort_by     || null,
-  sort_dir:    INITIAL.sort_dir    || 'desc',
-  options:     INITIAL.options     || {},
+  aggregation:   INITIAL.aggregation || 'avg',
+  limit:         INITIAL.limit       || 2000,
+  sort_by:       INITIAL.sort_by     || null,
+  sort_dir:      INITIAL.sort_dir    || 'desc',
+  options:       INITIAL.options     || {},
 };
-let _previewTimer  = null;
+
+let _previewTimer   = null;
 let _currentRenderer = null;
-let _dirty = false;
+let _dirty          = false;
+
+// Panel-local builder state (separate from the dashboard filter builder)
+let _panelTree = { id: 'panel-root', op: 'AND', conditions: [] };
 
 // ── API ────────────────────────────────────────────────────────────────────
-async function api(path, opts={}) {
-  const res = await fetch(path, { headers:{'Content-Type':'application/json'}, ...opts });
-  if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || res.statusText);
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || res.statusText);
+  }
   return res.status === 204 ? null : res.json();
 }
 
@@ -123,44 +230,72 @@ async function api(path, opts={}) {
 async function init() {
   const [reg, filters] = await Promise.all([
     api('/api/charts/registry'),
-    api(`/api/filters/${ALIAS}`),
+    api(`/api/filters/${encodeURIComponent(ALIAS)}`),
   ]);
   registry   = reg;
   filterSets = filters || [];
 
   renderTypePicker();
-  renderFilterSelect();
+  populateFilterDropdowns();
   renderDimensions();
   syncFormToState();
   schedulePreview();
 
-  // Wire up top-level inputs
-  document.getElementById('chart-name').addEventListener('input', e => { chartDef.name = e.target.value; markDirty(); });
-  document.getElementById('chart-icon').addEventListener('input', e => { chartDef.icon = e.target.value; markDirty(); });
-  document.getElementById('filter-select').addEventListener('change', e => {
-    const val = e.target.value;
-    if (val === '') { chartDef.filter_set_id = null; chartDef.filter_tree = null; }
-    else if (val === '__custom__') { /* handled separately */ }
-    else { chartDef.filter_set_id = parseInt(val); chartDef.filter_tree = null; }
+  // Top-bar inputs
+  document.getElementById('chart-name').addEventListener('input', e => {
+    chartDef.name = e.target.value; markDirty();
+  });
+  document.getElementById('chart-icon').addEventListener('input', e => {
+    chartDef.icon = e.target.value; markDirty();
+  });
+
+  // 3D option inputs
+  document.getElementById('opt-projection').addEventListener('change', e => {
+    chartDef.options = { ...chartDef.options, projection: e.target.value };
     markDirty(); schedulePreview();
   });
-  document.getElementById('opt-limit').addEventListener('input', e => { chartDef.limit = parseInt(e.target.value) || 2000; markDirty(); schedulePreview(); });
-  document.getElementById('opt-agg').addEventListener('change', e => { chartDef.aggregation = e.target.value; markDirty(); schedulePreview(); });
-  document.getElementById('opt-sort-dir').addEventListener('change', e => { chartDef.sort_dir = e.target.value; markDirty(); schedulePreview(); });
+  document.getElementById('opt-show-labels').addEventListener('change', e => {
+    chartDef.options = { ...chartDef.options, show_labels: e.target.checked };
+    markDirty(); schedulePreview();
+  });
+  const speedSlider = document.getElementById('opt-particle-speed');
+  speedSlider.addEventListener('input', e => {
+    document.getElementById('opt-particle-speed-val').textContent = parseFloat(e.target.value).toFixed(3);
+    chartDef.options = { ...chartDef.options, particle_speed: parseFloat(e.target.value) };
+    markDirty();
+    // Don't auto-preview on every slider tick — wait for mouseup
+  });
+  speedSlider.addEventListener('change', () => schedulePreview());
 }
 
 function syncFormToState() {
-  document.getElementById('chart-name').value = chartDef.name;
-  document.getElementById('chart-icon').value = chartDef.icon;
-  document.getElementById('opt-limit').value  = chartDef.limit;
-  document.getElementById('opt-agg').value    = chartDef.aggregation || 'avg';
-  document.getElementById('opt-sort-dir').value = chartDef.sort_dir;
+  document.getElementById('chart-name').value    = chartDef.name;
+  document.getElementById('chart-icon').value    = chartDef.icon;
+  document.getElementById('opt-limit').value     = chartDef.limit;
+  document.getElementById('opt-agg').value       = chartDef.aggregation || 'avg';
+  document.getElementById('opt-sort-dir').value  = chartDef.sort_dir;
 
-  const filterSel = document.getElementById('filter-select');
-  if (chartDef.filter_set_id) filterSel.value = String(chartDef.filter_set_id);
-  else if (chartDef.filter_tree) {
-    document.getElementById('filter-tree-badge').style.display = 'block';
+  // Filter dropdown
+  const sel = document.getElementById('filter-select');
+  if (chartDef.filter_set_id) {
+    sel.value = String(chartDef.filter_set_id);
+  } else if (chartDef.filter_tree) {
+    sel.value = '__custom__';
+    showFilterBadge(true);
   }
+
+  // 3D options
+  const opts = typeof chartDef.options === 'string'
+    ? JSON.parse(chartDef.options || '{}')
+    : (chartDef.options || {});
+  if (opts.projection) document.getElementById('opt-projection').value = opts.projection;
+  if (opts.show_labels !== undefined) document.getElementById('opt-show-labels').checked = opts.show_labels;
+  if (opts.particle_speed !== undefined) {
+    document.getElementById('opt-particle-speed').value = opts.particle_speed;
+    document.getElementById('opt-particle-speed-val').textContent = parseFloat(opts.particle_speed).toFixed(3);
+  }
+
+  update3DPanel();
 }
 
 // ── Type picker ────────────────────────────────────────────────────────────
@@ -169,7 +304,8 @@ function renderTypePicker() {
   if (!registry || !registry.types) return;
   container.innerHTML = Object.entries(registry.types).map(([key, def]) => `
     <button class="type-btn ${chartDef.chart_type === key ? 'active' : ''}"
-            data-type="${key}" title="${def.description}" onclick="selectType('${key}')">
+            data-type="${key}" title="${def.description}"
+            onclick="selectType('${key}')">
       <span class="type-btn-icon">${def.icon}</span>
       <span class="type-btn-label">${def.label}</span>
     </button>
@@ -178,114 +314,390 @@ function renderTypePicker() {
 
 function selectType(key) {
   if (chartDef.chart_type === key) return;
+
+  const prevDims = { ...chartDef.dimensions };
   chartDef.chart_type = key;
 
-  // Preserve dimension values where keys match
+  // Preserve compatible dimensions by key
   const typeDef = registry.types[key];
   const newDims = {};
   if (typeDef) {
-    Object.keys(typeDef.dimensions).forEach(dimKey => {
-      newDims[dimKey] = chartDef.dimensions[dimKey] || {
-        source: 'field', field: '', label: '', scale: 'linear',
-      };
+    Object.keys(typeDef.dimensions).forEach(dk => {
+      newDims[dk] = prevDims[dk] || { source: 'field', field: '', label: '', scale: 'linear' };
     });
   }
   chartDef.dimensions = newDims;
 
-  // Show/hide aggregation
+  // Aggregation visibility
   const isAgg = typeDef && typeDef.data_shape === 'aggregated';
   document.getElementById('agg-row').style.display = isAgg ? 'flex' : 'none';
 
-  document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === key));
+  document.querySelectorAll('.type-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.type === key));
+
+  update3DPanel();
   renderDimensions();
   markDirty();
   schedulePreview();
 }
 
-// ── Filter select ──────────────────────────────────────────────────────────
-function renderFilterSelect() {
-  const sel = document.getElementById('filter-select');
-  sel.innerHTML = `<option value="">All accounts</option>` +
-    filterSets.map(f => `<option value="${f.id}" ${chartDef.filter_set_id == f.id ? 'selected':''}>
-      ${f.icon || '🔍'} ${f.name}
-    </option>`).join('');
+function update3DPanel() {
+  const is3d = chartDef.chart_type === 'force_directed_3d';
+  document.getElementById('options-3d-section').style.display = is3d ? '' : 'none';
 }
+
+// ── Filter handling ────────────────────────────────────────────────────────
+function populateFilterDropdowns() {
+  // Main select
+  const sel = document.getElementById('filter-select');
+  const current = sel.value;
+  // Keep first two options (All + Custom divider)
+  while (sel.options.length > 2) sel.remove(2);
+  filterSets.forEach(f => {
+    const opt = document.createElement('option');
+    opt.value = String(f.id);
+    opt.textContent = `${f.icon || '🔍'} ${f.name}`;
+    if (current === String(f.id)) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  // Panel select
+  const psel = document.getElementById('filter-panel-saved');
+  while (psel.options.length > 1) psel.remove(1);
+  filterSets.forEach(f => {
+    const opt = document.createElement('option');
+    opt.value = String(f.id);
+    opt.textContent = `${f.icon || '🔍'} ${f.name}`;
+    psel.appendChild(opt);
+  });
+}
+
+function onFilterSelectChange(val) {
+  if (val === '') {
+    chartDef.filter_set_id = null;
+    chartDef.filter_tree   = null;
+    showFilterBadge(false);
+  } else if (val === '__custom__') {
+    // Open the panel builder
+    openFilterPanel();
+    return;
+  } else {
+    chartDef.filter_set_id = parseInt(val);
+    chartDef.filter_tree   = null;
+    showFilterBadge(false);
+  }
+  markDirty();
+  schedulePreview();
+}
+
+function showFilterBadge(show) {
+  document.getElementById('filter-tree-badge').style.display = show ? 'flex' : 'none';
+}
+
+function clearInlineFilter() {
+  chartDef.filter_tree   = null;
+  chartDef.filter_set_id = null;
+  document.getElementById('filter-select').value = '';
+  showFilterBadge(false);
+  _panelTree = { id: 'panel-root', op: 'AND', conditions: [] };
+  markDirty();
+  schedulePreview();
+}
+
+// ── Filter panel (inline builder) ──────────────────────────────────────────
+function openFilterPanel() {
+  // Pre-load existing tree into panel
+  if (chartDef.filter_tree) {
+    _panelTree = JSON.parse(JSON.stringify(chartDef.filter_tree));
+    if (!_panelTree.id) _panelTree.id = 'panel-root';
+  } else {
+    _panelTree = { id: 'panel-root', op: 'AND', conditions: [] };
+  }
+  // Pre-select saved filter if applicable
+  const psel = document.getElementById('filter-panel-saved');
+  psel.value = chartDef.filter_set_id ? String(chartDef.filter_set_id) : '';
+
+  renderPanelBuilder();
+  document.getElementById('filter-panel-modal').classList.add('open');
+}
+
+function closeFilterPanel() {
+  document.getElementById('filter-panel-modal').classList.remove('open');
+}
+
+function onFilterPanelSavedChange(val) {
+  if (val) {
+    // Clear custom tree when a saved filter is picked
+    _panelTree = { id: 'panel-root', op: 'AND', conditions: [] };
+    renderPanelBuilder();
+  }
+}
+
+function applyFilterPanel() {
+  const savedVal = document.getElementById('filter-panel-saved').value;
+  if (savedVal && _panelTree.conditions.length === 0) {
+    // Use saved filter
+    chartDef.filter_set_id = parseInt(savedVal);
+    chartDef.filter_tree   = null;
+    document.getElementById('filter-select').value = savedVal;
+    showFilterBadge(false);
+  } else if (_panelTree.conditions.length > 0) {
+    // Use custom tree
+    chartDef.filter_tree   = JSON.parse(JSON.stringify(_panelTree));
+    chartDef.filter_set_id = null;
+    document.getElementById('filter-select').value = '__custom__';
+    showFilterBadge(true);
+  } else {
+    clearInlineFilter();
+  }
+  closeFilterPanel();
+  markDirty();
+  schedulePreview();
+}
+
+// ── Mini condition tree builder (panel-scoped, no global state) ────────────
+const PANEL_FIELDS = {
+  'i_follow_them':         { label: 'I Follow Them',       type: 'boolean' },
+  'they_follow_me':        { label: 'They Follow Me',      type: 'boolean' },
+  'interacted_with_owner': { label: 'Has Interacted',      type: 'boolean' },
+  'is_one_sided_follow':   { label: 'One-Sided Follow',    type: 'boolean' },
+  'is_follower_only':      { label: 'Follower Only',       type: 'boolean' },
+  'is_inactive':           { label: 'Is Inactive',         type: 'boolean' },
+  'is_repost_heavy':       { label: 'Is Repost Heavy',     type: 'boolean' },
+  'muted':                 { label: 'Muted',               type: 'boolean' },
+  'blocked':               { label: 'Blocked',             type: 'boolean' },
+  'followers_count':       { label: 'Followers',           type: 'number'  },
+  'follows_count':         { label: 'Following',           type: 'number'  },
+  'posts_count':           { label: 'Total Posts',         type: 'number'  },
+  'days_since_post':       { label: 'Days Since Post',     type: 'number'  },
+  'repost_ratio':          { label: 'Repost Ratio (0-1)',  type: 'number'  },
+  'sampled_post_count':    { label: 'Sampled Posts',       type: 'number'  },
+  'repost_count':          { label: 'Repost Count',        type: 'number'  },
+  'original_post_count':   { label: 'Original Posts',      type: 'number'  },
+  'flowrank_score':        { label: 'FlowRank',            type: 'number'  },
+  'in_subgraph_degree':    { label: 'In-Subgraph Degree',  type: 'number'  },
+  'clustering_coefficient':{ label: 'Clustering Coeff.',   type: 'number'  },
+  'community_id':          { label: 'Community ID',        type: 'number'  },
+  'crawl_priority':        { label: 'Crawl Priority',      type: 'number'  },
+  'crawl_tier':            { label: 'Crawl Tier',          type: 'number'  },
+  'handle':                { label: 'Handle',              type: 'string'  },
+  'display_name':          { label: 'Display Name',        type: 'string'  },
+};
+
+const PANEL_OPS = {
+  boolean: [{ v:'eq', l:'is' }],
+  number:  [
+    {v:'eq',l:'='},{v:'neq',l:'≠'},{v:'gt',l:'>'},{v:'gte',l:'≥'},
+    {v:'lt',l:'<'},{v:'lte',l:'≤'},
+  ],
+  string:  [{v:'eq',l:'is'},{v:'contains',l:'contains'},{v:'starts_with',l:'starts with'}],
+};
+
+function _panelGenId() { return 'p' + Math.random().toString(36).slice(2,9); }
+
+function _panelFind(tree, id) {
+  if (tree.id === id) return tree;
+  for (const c of (tree.conditions || [])) {
+    const f = _panelFind(c, id);
+    if (f) return f;
+  }
+  return null;
+}
+
+function _panelRemove(tree, id) {
+  tree.conditions = (tree.conditions || []).filter(c => c.id !== id);
+  (tree.conditions || []).forEach(c => { if (c.conditions) _panelRemove(c, id); });
+}
+
+function renderPanelBuilder() {
+  const root = document.getElementById('filter-panel-builder-root');
+  if (!root) return;
+  root.innerHTML = _panelRenderGroup(_panelTree);
+}
+
+function _panelFieldOptions(selected) {
+  const groups = { Relationship: [], Activity: [], Profile: [], Network: [], Other: [] };
+  Object.entries(PANEL_FIELDS).forEach(([k, v]) => {
+    const g = ['i_follow_them','they_follow_me','interacted_with_owner','is_one_sided_follow','is_follower_only','muted','blocked'].includes(k) ? 'Relationship'
+             : ['is_inactive','is_repost_heavy','days_since_post','repost_ratio','sampled_post_count','repost_count','original_post_count','posts_count'].includes(k) ? 'Activity'
+             : ['followers_count','follows_count','handle','display_name'].includes(k) ? 'Profile'
+             : ['flowrank_score','in_subgraph_degree','clustering_coefficient','community_id','crawl_priority','crawl_tier'].includes(k) ? 'Network'
+             : 'Other';
+    groups[g].push({ key: k, ...v });
+  });
+  return Object.entries(groups).filter(([,v]) => v.length).map(([g, items]) =>
+    `<optgroup label="${g}">${items.map(it =>
+      `<option value="${it.key}"${selected===it.key?' selected':''}>${it.label}</option>`
+    ).join('')}</optgroup>`
+  ).join('');
+}
+
+function _panelRenderGroup(group) {
+  const conds = (group.conditions || []).map(c =>
+    c.conditions ? _panelRenderGroup(c) : _panelRenderRule(c)
+  ).join('');
+  return `
+    <div class="builder-group" data-pid="${group.id}">
+      <div class="group-header">
+        <select onchange="panelUpdateGroupOp('${group.id}',this.value)">
+          <option value="AND"${group.op==='AND'?' selected':''}>AND</option>
+          <option value="OR"${group.op==='OR'?' selected':''}>OR</option>
+        </select>
+        <button class="btn btn-ghost btn-mini" onclick="panelAddRule('${group.id}')">+ Rule</button>
+        <button class="btn btn-ghost btn-mini" onclick="panelAddGroup('${group.id}')">+ Group</button>
+        ${group.id !== 'panel-root'
+          ? `<button class="btn btn-danger btn-mini" onclick="panelRemoveNode('${group.id}')">×</button>`
+          : ''}
+      </div>
+      <div class="group-content">${conds}</div>
+    </div>`;
+}
+
+function _panelRenderRule(rule) {
+  const fd = PANEL_FIELDS[rule.field] || { type: 'string' };
+  const ops = PANEL_OPS[fd.type] || PANEL_OPS.string;
+  const opsHtml = ops.map(o =>
+    `<option value="${o.v}"${rule.op===o.v?' selected':''}>${o.l}</option>`
+  ).join('');
+
+  const valInput = fd.type === 'boolean'
+    ? `<select class="rule-value" onchange="panelUpdateRule('${rule.id}','value',this.value==='true')">
+         <option value="true"${rule.value===true?' selected':''}>True</option>
+         <option value="false"${rule.value===false?' selected':''}>False</option>
+       </select>`
+    : `<input class="rule-value" type="${fd.type==='number'?'number':'text'}"
+              value="${rule.value ?? ''}"
+              oninput="panelUpdateRule('${rule.id}','value',${fd.type==='number'?'Number(this.value)':'this.value'})">`;
+
+  return `
+    <div class="builder-rule" data-pid="${rule.id}">
+      <select class="rule-field" onchange="panelUpdateRule('${rule.id}','field',this.value)">
+        ${_panelFieldOptions(rule.field)}
+      </select>
+      <select class="rule-op" onchange="panelUpdateRule('${rule.id}','op',this.value)">
+        ${opsHtml}
+      </select>
+      ${valInput}
+      <button class="btn btn-ghost btn-mini" onclick="panelRemoveNode('${rule.id}')">×</button>
+    </div>`;
+}
+
+// Panel mutation callbacks (global so inline onclick works)
+window.panelAddRule = function(gid) {
+  const g = _panelFind(_panelTree, gid);
+  if (g) { g.conditions.push({ id: _panelGenId(), field: 'i_follow_them', op: 'eq', value: true }); }
+  renderPanelBuilder();
+};
+window.panelAddGroup = function(gid) {
+  const g = _panelFind(_panelTree, gid);
+  if (g) { g.conditions.push({ id: _panelGenId(), op: 'AND', conditions: [] }); }
+  renderPanelBuilder();
+};
+window.panelRemoveNode = function(id) {
+  _panelRemove(_panelTree, id);
+  renderPanelBuilder();
+};
+window.panelUpdateGroupOp = function(id, op) {
+  const n = _panelFind(_panelTree, id);
+  if (n) { n.op = op; }
+};
+window.panelUpdateRule = function(id, key, val) {
+  const n = _panelFind(_panelTree, id);
+  if (n) {
+    n[key] = val;
+    if (key === 'field') {
+      const fd = PANEL_FIELDS[val] || { type: 'string' };
+      n.op    = 'eq';
+      n.value = fd.type === 'boolean' ? true : fd.type === 'number' ? 0 : '';
+      renderPanelBuilder();
+    }
+  }
+};
+
+// Aliases called from the filter panel add buttons
+window.addRuleToPanel    = (id) => window.panelAddRule('panel-root');
+window.addGroupToPanel   = (id) => window.panelAddGroup('panel-root');
+window.addMathExpressionRuleToPanel = () => window.panelAddRule('panel-root'); // simplified
 
 // ── Dimension rows ─────────────────────────────────────────────────────────
 const NUMERIC_FIELDS = [
-  ['followers_count','Followers'], ['follows_count','Following'], ['posts_count','Posts'],
-  ['days_since_post','Days Inactive'], ['repost_ratio','Repost Ratio'],
-  ['sampled_post_count','Sampled Posts'], ['repost_count','Reposts'],
-  ['original_post_count','Original Posts'], ['flowrank_score','FlowRank'],
-  ['clustering_coefficient','Clustering Coeff.'], ['in_subgraph_degree','In-Subgraph Degree'],
+  ['followers_count','Followers'],['follows_count','Following'],['posts_count','Posts'],
+  ['days_since_post','Days Inactive'],['repost_ratio','Repost Ratio'],
+  ['sampled_post_count','Sampled Posts'],['repost_count','Reposts'],
+  ['original_post_count','Original Posts'],['flowrank_score','FlowRank'],
+  ['clustering_coefficient','Clustering Coeff.'],['in_subgraph_degree','In-Subgraph Degree'],
   ['crawl_priority','Crawl Priority'],
 ];
 const CATEGORICAL_FIELDS = [
-  ['community_id','Community'], ['crawl_tier','Crawl Tier'],
-  ['i_follow_them','I Follow'], ['they_follow_me','Follows Me'],
-  ['is_inactive','Inactive'], ['is_repost_heavy','Repost Heavy'],
-  ['is_one_sided_follow','One-Sided'], ['is_follower_only','Follower Only'],
+  ['community_id','Community'],['crawl_tier','Crawl Tier'],
+  ['i_follow_them','I Follow'],['they_follow_me','Follows Me'],
+  ['is_inactive','Inactive'],['is_repost_heavy','Repost Heavy'],
+  ['is_one_sided_follow','One-Sided'],['is_follower_only','Follower Only'],
 ];
 const DATETIME_FIELDS = [
-  ['last_post_at','Last Post'], ['last_analyzed_at','Last Analyzed'],
-  ['last_hydrated_at','Last Hydrated'], ['first_seen_at','First Seen'],
+  ['last_post_at','Last Post'],['last_analyzed_at','Last Analyzed'],
+  ['last_hydrated_at','Last Hydrated'],['first_seen_at','First Seen'],
 ];
 
-function fieldOptionsHtml(accepts, selectedField) {
-  const groups = [];
+function fieldOptionsHtml(accepts, selected) {
+  const parts = [];
   if (!accepts || accepts.includes('numeric')) {
-    groups.push(`<optgroup label="Numeric">${NUMERIC_FIELDS.map(([v,l]) =>
-      `<option value="${v}" ${selectedField===v?'selected':''}>${l}</option>`).join('')}</optgroup>`);
+    parts.push(`<optgroup label="Numeric">${NUMERIC_FIELDS.map(([v,l]) =>
+      `<option value="${v}"${selected===v?' selected':''}>${l}</option>`).join('')}</optgroup>`);
   }
   if (!accepts || accepts.includes('categorical')) {
-    groups.push(`<optgroup label="Categorical">${CATEGORICAL_FIELDS.map(([v,l]) =>
-      `<option value="${v}" ${selectedField===v?'selected':''}>${l}</option>`).join('')}</optgroup>`);
+    parts.push(`<optgroup label="Categorical">${CATEGORICAL_FIELDS.map(([v,l]) =>
+      `<option value="${v}"${selected===v?' selected':''}>${l}</option>`).join('')}</optgroup>`);
   }
   if (!accepts || accepts.includes('datetime')) {
-    groups.push(`<optgroup label="Date">${DATETIME_FIELDS.map(([v,l]) =>
-      `<option value="${v}" ${selectedField===v?'selected':''}>${l}</option>`).join('')}</optgroup>`);
+    parts.push(`<optgroup label="Date">${DATETIME_FIELDS.map(([v,l]) =>
+      `<option value="${v}"${selected===v?' selected':''}>${l}</option>`).join('')}</optgroup>`);
   }
-  return groups.join('');
+  return parts.join('');
 }
 
 function renderDimensions() {
-  const container = document.getElementById('dimensions-section');
-  const typeDef   = registry.types && registry.types[chartDef.chart_type];
-  if (!typeDef) { container.style.display = 'none'; return; }
-  container.style.display = '';
+  const section  = document.getElementById('dimensions-section');
+  const typeDef  = registry.types && registry.types[chartDef.chart_type];
+  if (!typeDef) { section.style.display = 'none'; return; }
+  section.style.display = '';
 
   const rows = document.getElementById('dimension-rows');
   rows.innerHTML = '';
 
   const dimDefs = typeDef.dimensions;
-  const axisKeys = Object.keys(dimDefs).filter(k => k.startsWith('axis_') && dimDefs[k].dynamic);
-  const staticKeys = Object.keys(dimDefs).filter(k => !axisKeys.includes(k));
 
-  // Static dimensions
-  staticKeys.forEach(dimKey => {
-    const dimDef = dimDefs[dimKey];
-    const cfg    = chartDef.dimensions[dimKey] || { source:'field', field:'', label:'', scale:'linear' };
-    rows.appendChild(makeDimRow(dimKey, dimDef, cfg));
+  // Separate static dims from dynamic axis_* dims
+  const staticKeys = Object.keys(dimDefs).filter(k => !dimDefs[k].dynamic);
+  const dynKeys    = Object.keys(chartDef.dimensions)
+                           .filter(k => k.match(/^axis_\d+$/))
+                           .sort();
+
+  staticKeys.forEach(dk => {
+    rows.appendChild(makeDimRow(dk, dimDefs[dk], chartDef.dimensions[dk] || { source:'field',field:'',label:'',scale:'linear' }));
   });
 
   // Dynamic axes (hive)
-  const dynKeys = Object.keys(chartDef.dimensions).filter(k => k.startsWith('axis_'));
-  const minAxes = typeDef.min_axes || 3;
+  const minAxes = typeDef.min_axes || 0;
   const maxAxes = typeDef.max_axes || 8;
-  dynKeys.sort().forEach(k => {
-    const cfg = chartDef.dimensions[k];
-    rows.appendChild(makeDimRow(k, { required: true, accepts: ['numeric'], label: 'Axis', dynamic: true }, cfg, dynKeys.length > minAxes));
+
+  dynKeys.forEach(dk => {
+    const cfg = chartDef.dimensions[dk] || { source:'field',field:'',label:'',scale:'linear' };
+    rows.appendChild(makeDimRow(dk, { required:true, accepts:['numeric'], label:`Axis ${dk.replace('axis_','')}`  }, cfg, dynKeys.length > minAxes));
   });
 
-  // Add axis button
-  if (axisKeys.length > 0 && dynKeys.length < maxAxes) {
+  // Add axis button (for hive)
+  const hasDynamic = Object.values(dimDefs).some(d => d.dynamic);
+  if (hasDynamic && dynKeys.length < maxAxes) {
     const addBtn = document.createElement('button');
     addBtn.className = 'btn btn-ghost btn-sm';
-    addBtn.style.marginTop = '0.5rem';
+    addBtn.style.marginTop = '0.4rem';
     addBtn.textContent = '+ Add Axis';
     addBtn.onclick = () => {
-      const nextIdx = Math.max(...dynKeys.map(k => parseInt(k.split('_')[1]))) + 1;
-      chartDef.dimensions[`axis_${nextIdx}`] = { source:'field', field:'flowrank_score', label:`Axis ${nextIdx+1}`, scale:'log' };
+      const maxIdx = dynKeys.length > 0
+        ? Math.max(...dynKeys.map(k => parseInt(k.replace('axis_','')))) + 1
+        : dynKeys.length;
+      chartDef.dimensions[`axis_${maxIdx}`] = { source:'field', field:'flowrank_score', label:`Axis ${maxIdx+1}`, scale:'log' };
       renderDimensions(); markDirty(); schedulePreview();
     };
     rows.appendChild(addBtn);
@@ -293,25 +705,33 @@ function renderDimensions() {
 }
 
 function makeDimRow(dimKey, dimDef, cfg, canRemove = false) {
-  const row = document.createElement('div');
+  const row    = document.createElement('div');
   row.className = 'dim-row';
   const accepts = dimDef.accepts;
 
   row.innerHTML = `
     <div class="dim-row-header">
-      <span class="dim-label">${dimDef.label || dimKey}${dimDef.required ? '' : ' <span style="color:var(--muted2)">(optional)</span>'}</span>
-      ${canRemove ? `<button class="btn btn-ghost btn-sm" style="padding:0 4px" onclick="removeDimAxis('${dimKey}')">×</button>` : ''}
+      <span class="dim-label">
+        ${dimDef.label || dimKey}
+        ${dimDef.required ? '' : ' <span style="color:var(--muted2)">(optional)</span>'}
+      </span>
+      ${canRemove
+        ? `<button class="btn btn-ghost btn-sm" style="padding:0 4px"
+                   onclick="removeDimAxis('${dimKey}')">×</button>`
+        : ''}
     </div>
     <div class="dim-row-controls">
       <select class="sort-select dim-field-sel" style="flex:1" data-dim="${dimKey}">
         <option value="">Select field…</option>
         ${fieldOptionsHtml(accepts, cfg.field)}
       </select>
-      <select class="sort-select dim-scale-sel" style="width:82px" data-dim="${dimKey}">
-        ${['linear','log','sqrt','time'].map(s => `<option value="${s}" ${cfg.scale===s?'selected':''}>${s}</option>`).join('')}
+      <select class="sort-select dim-scale-sel" style="width:80px" data-dim="${dimKey}">
+        ${['linear','log','sqrt','time'].map(s =>
+          `<option value="${s}"${cfg.scale===s?' selected':''}>${s}</option>`).join('')}
       </select>
     </div>
-    <input class="field dim-label-input" type="text" placeholder="Axis label" value="${cfg.label || ''}" data-dim="${dimKey}" style="width:100%;margin-top:0.25rem">
+    <input class="field dim-label-input" type="text" placeholder="Axis label"
+           value="${cfg.label || ''}" data-dim="${dimKey}" style="width:100%;margin-top:0.25rem">
   `;
 
   row.querySelector('.dim-field-sel').addEventListener('change', e => updateDim(dimKey, 'field', e.target.value));
@@ -321,38 +741,51 @@ function makeDimRow(dimKey, dimDef, cfg, canRemove = false) {
   return row;
 }
 
-function updateDim(dimKey, prop, value) {
-  if (!chartDef.dimensions[dimKey]) chartDef.dimensions[dimKey] = { source:'field', field:'', scale:'linear', label:'' };
-  chartDef.dimensions[dimKey][prop] = value;
-  if (prop === 'field') {
-    // Auto-set label if empty
-    const allFields = [...NUMERIC_FIELDS, ...CATEGORICAL_FIELDS, ...DATETIME_FIELDS];
-    const found = allFields.find(([v]) => v === value);
-    if (found && !chartDef.dimensions[dimKey].label) {
-      chartDef.dimensions[dimKey].label = found[1];
-      const labelInput = document.querySelector(`.dim-label-input[data-dim="${dimKey}"]`);
-      if (labelInput) labelInput.value = found[1];
-    }
-    // Auto-set scale
-    const isDate = DATETIME_FIELDS.some(([v]) => v === value);
-    const isLog  = ['flowrank_score','followers_count','follows_count','posts_count','clustering_coefficient'].includes(value);
-    if (isDate) chartDef.dimensions[dimKey].scale = 'time';
-    else if (isLog) chartDef.dimensions[dimKey].scale = 'log';
-    const scaleEl = document.querySelector(`.dim-scale-sel[data-dim="${dimKey}"]`);
-    if (scaleEl) scaleEl.value = chartDef.dimensions[dimKey].scale;
-  }
-  markDirty(); schedulePreview();
-}
-
-function removeDimAxis(key) {
+window.removeDimAxis = function(key) {
   delete chartDef.dimensions[key];
   renderDimensions(); markDirty(); schedulePreview();
+};
+
+function updateDim(dimKey, prop, value) {
+  if (!chartDef.dimensions[dimKey]) {
+    chartDef.dimensions[dimKey] = { source:'field', field:'', scale:'linear', label:'' };
+  }
+  chartDef.dimensions[dimKey][prop] = value;
+
+  if (prop === 'field') {
+    // Auto-label
+    const all = [...NUMERIC_FIELDS, ...CATEGORICAL_FIELDS, ...DATETIME_FIELDS];
+    const found = all.find(([v]) => v === value);
+    if (found && !chartDef.dimensions[dimKey].label) {
+      chartDef.dimensions[dimKey].label = found[1];
+      const el = document.querySelector(`.dim-label-input[data-dim="${dimKey}"]`);
+      if (el) el.value = found[1];
+    }
+    // Auto-scale
+    const isDate = DATETIME_FIELDS.some(([v]) => v === value);
+    const isLog  = ['flowrank_score','followers_count','follows_count','posts_count','clustering_coefficient'].includes(value);
+    const auto   = isDate ? 'time' : isLog ? 'log' : 'linear';
+    chartDef.dimensions[dimKey].scale = auto;
+    const scaleEl = document.querySelector(`.dim-scale-sel[data-dim="${dimKey}"]`);
+    if (scaleEl) scaleEl.value = auto;
+  }
+
+  markDirty();
+  schedulePreview();
+}
+
+function onOptionChange() {
+  chartDef.aggregation = document.getElementById('opt-agg').value;
+  chartDef.limit       = parseInt(document.getElementById('opt-limit').value) || 2000;
+  chartDef.sort_dir    = document.getElementById('opt-sort-dir').value;
+  markDirty();
+  schedulePreview();
 }
 
 // ── Preview ────────────────────────────────────────────────────────────────
 function schedulePreview() {
   clearTimeout(_previewTimer);
-  _previewTimer = setTimeout(refreshPreview, 600);
+  _previewTimer = setTimeout(refreshPreview, 700);
 }
 
 async function refreshPreview() {
@@ -366,56 +799,77 @@ async function refreshPreview() {
   }
   container.innerHTML = '<div class="state-box">Loading preview…</div>';
 
-  // Build def to post
-  const def = {
-    ...chartDef,
-    dimensions: chartDef.dimensions,
-  };
+  // Build payload
+  const payload = buildPayload();
 
   try {
-    const result = await api(`/api/charts/${ALIAS}/preview`, {
-      method:'POST',
-      body: JSON.stringify(def),
+    const result = await api(`/api/charts/${encodeURIComponent(ALIAS)}/preview`, {
+      method: 'POST',
+      body:   JSON.stringify(payload),
     });
     container.innerHTML = '';
     _currentRenderer = ChartBase.renderChart(container, result, {
-      interactive: true,
-      animated:    true,
-      cssVars:     ChartBase.getCSSVars(),
+      interactive:  true,
+      animated:     true,
+      cssVars:      ChartBase.getCSSVars(),
       colorPalette: ChartBase.PALETTE,
       onPointClick: (did) => { if (typeof InfoPanel !== 'undefined') InfoPanel.open('profile', did); },
     });
-    const total = result.total || (result.data && result.data.length) || 0;
+    const total = result.total
+      || (result.data && result.data.length)
+      || (result.nodes && result.nodes.length)
+      || 0;
     meta.textContent = `${total.toLocaleString()} data points${result.truncated ? ' (truncated)' : ''}`;
-  } catch(e) {
+  } catch (e) {
     container.innerHTML = `<div class="state-box" style="color:var(--danger)">${e.message}</div>`;
     meta.textContent = 'Error';
   }
 }
 
 // ── Save ───────────────────────────────────────────────────────────────────
+function buildPayload() {
+  const dims = { ...chartDef.dimensions };
+  // Sync 3D options from form
+  if (chartDef.chart_type === 'force_directed_3d') {
+    chartDef.options = {
+      projection:     document.getElementById('opt-projection').value,
+      show_labels:    document.getElementById('opt-show-labels').checked,
+      particle_speed: parseFloat(document.getElementById('opt-particle-speed').value),
+    };
+  }
+
+  return {
+    ...chartDef,
+    name:        document.getElementById('chart-name').value || 'Untitled Chart',
+    icon:        document.getElementById('chart-icon').value || '📊',
+    dimensions:  JSON.stringify(dims),
+    filter_tree: chartDef.filter_tree ? JSON.stringify(chartDef.filter_tree) : null,
+    options:     chartDef.options ? JSON.stringify(chartDef.options) : null,
+  };
+}
+
 async function saveChart() {
   const btn = document.getElementById('save-btn');
   btn.disabled = true;
   try {
-    const payload = {
-      ...chartDef,
-      name: document.getElementById('chart-name').value || 'Untitled Chart',
-      icon: document.getElementById('chart-icon').value || '📊',
-      dimensions: JSON.stringify(chartDef.dimensions),
-      filter_tree: chartDef.filter_tree ? JSON.stringify(chartDef.filter_tree) : null,
-    };
+    const payload = buildPayload();
     if (CHART_ID) {
-      await api(`/api/charts/${ALIAS}/${CHART_ID}`, { method:'PUT', body: JSON.stringify(payload) });
+      await api(`/api/charts/${encodeURIComponent(ALIAS)}/${CHART_ID}`, {
+        method: 'PUT',
+        body:   JSON.stringify(payload),
+      });
     } else {
-      const created = await api(`/api/charts/${ALIAS}`, { method:'POST', body: JSON.stringify(payload) });
+      const created = await api(`/api/charts/${encodeURIComponent(ALIAS)}`, {
+        method: 'POST',
+        body:   JSON.stringify(payload),
+      });
       if (created && created.id) {
-        window.location.href = `/charts/${ALIAS}/${created.id}/edit`;
+        window.location.href = `/charts/${encodeURIComponent(ALIAS)}/${created.id}/edit`;
         return;
       }
     }
     clearDirty();
-  } catch(e) {
+  } catch (e) {
     alert('Save failed: ' + e.message);
   } finally {
     btn.disabled = false;
@@ -424,38 +878,51 @@ async function saveChart() {
 
 function discardChanges() {
   if (_dirty && !confirm('Discard unsaved changes?')) return;
-  window.location.href = `/charts/${ALIAS}`;
+  window.location.href = `/charts/${encodeURIComponent(ALIAS)}`;
 }
 
 function markDirty() {
   _dirty = true;
   document.getElementById('dirty-hint').textContent = 'Unsaved changes';
 }
-
 function clearDirty() {
   _dirty = false;
   document.getElementById('dirty-hint').textContent = '';
 }
 
-// ── Boot ───────────────────────────────────────────────────────────────────
-const loadRenderers = () => new Promise(resolve => {
-  const scripts = [
-    '/static/js/renderers/base.js',
-    '/static/js/renderers/scatter.js',
-    '/static/js/renderers/histogram.js',
-    '/static/js/renderers/bar-bubble-timeline.js',
-    '/static/js/renderers/hive-pack-force.js',
-  ];
-  let loaded = 0;
-  scripts.forEach(src => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = () => { if (++loaded === scripts.length) resolve(); };
-    document.head.appendChild(s);
-  });
-});
+// ── Script loading ─────────────────────────────────────────────────────────
+const RENDERER_SCRIPTS = [
+  '/static/js/renderers/base.js',
+  '/static/js/renderers/scatter.js',
+  '/static/js/renderers/histogram.js',
+  '/static/js/renderers/bar-bubble-timeline.js',
+  '/static/js/renderers/hive-pack-force.js',
+  '/static/js/renderers/force-directed-3d.js',
+  '/static/js/community-view.js',
+  '/static/js/profile-view.js',
+  '/static/js/info-panel.js',
+];
 
-loadRenderers().then(init);
+function loadScripts(srcs) {
+  return srcs.reduce((p, src) =>
+    p.then(() => new Promise((res, rej) => {
+      // Don't reload if already present
+      if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+      const s = document.createElement('script');
+      s.src    = src;
+      s.onload = res;
+      s.onerror = rej;
+      document.head.appendChild(s);
+    })),
+    Promise.resolve()
+  );
+}
+
+loadScripts(RENDERER_SCRIPTS).then(init).catch(err => {
+  console.error('Studio init failed:', err);
+  document.getElementById('preview-container').innerHTML =
+    `<div class="state-box" style="color:var(--danger)">Failed to load renderers: ${err.message}</div>`;
+});
 </script>
 </body>
 </html>

@@ -365,15 +365,45 @@ async def index(request: Request):
 
 @app.get("/graph/{alias}", response_class=HTMLResponse)
 async def graph_view(request: Request, alias: str):
-    return templates.TemplateResponse(request, "graph.html", {"alias": alias})
+    """Legacy redirect → Chart Studio force_directed chart."""
+    from fastapi.responses import RedirectResponse as _RR
+    from db.models import ChartDefinition, SavedAccount as _SA
+    owner = await _SA.get_or_none(alias=alias)
+    if owner:
+        chart = await ChartDefinition.filter(
+            owner=owner, chart_type="force_directed"
+        ).order_by("pin_order", "created_at").first()
+        if chart:
+            return _RR(f"/charts/{alias}/{chart.id}/view")
+    return _RR(f"/charts/{alias}")
 
 @app.get("/hive/{alias}", response_class=HTMLResponse)
 async def hive_view(request: Request, alias: str):
-    return templates.TemplateResponse(request, "hive.html", {"alias": alias})
+    """Legacy redirect → Chart Studio hive chart."""
+    from fastapi.responses import RedirectResponse as _RR
+    from db.models import ChartDefinition, SavedAccount as _SA
+    owner = await _SA.get_or_none(alias=alias)
+    if owner:
+        chart = await ChartDefinition.filter(
+            owner=owner, chart_type="hive"
+        ).order_by("created_at").first()
+        if chart:
+            return _RR(f"/charts/{alias}/{chart.id}/view")
+    return _RR(f"/charts/{alias}")
 
 @app.get("/pack/{alias}", response_class=HTMLResponse)
 async def pack_view(request: Request, alias: str):
-    return templates.TemplateResponse(request, "pack.html", {"alias": alias})
+    """Legacy redirect → Chart Studio circle_packing chart."""
+    from fastapi.responses import RedirectResponse as _RR
+    from db.models import ChartDefinition, SavedAccount as _SA
+    owner = await _SA.get_or_none(alias=alias)
+    if owner:
+        chart = await ChartDefinition.filter(
+            owner=owner, chart_type="circle_packing"
+        ).order_by("created_at").first()
+        if chart:
+            return _RR(f"/charts/{alias}/{chart.id}/view")
+    return _RR(f"/charts/{alias}")
 
 # ── Chart Studio page routes ──────────────────────────────────────────────────
 @app.get("/charts/{alias}", response_class=HTMLResponse)

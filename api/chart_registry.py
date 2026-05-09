@@ -117,7 +117,7 @@ CHART_REGISTRY = {
         "default_limit": 3000,
     },
     "force_directed": {
-        "label": "Force-Directed Graph",
+        "label": "Force Graph (2D)",
         "icon": "🕸",
         "description": "Network graph with physics simulation. Nodes are accounts, edges are follow relationships.",
         "dimensions": {
@@ -129,6 +129,45 @@ CHART_REGISTRY = {
         "render_mode": "webgl",
         "webgl_available": True,
         "default_limit": 1500,
+    },
+    "force_directed_3d": {
+        "label": "Force Graph (3D)",
+        "icon": "🌐",
+        "description": "3D force-directed network graph. Nodes float in 3D space; rotate and zoom to explore depth. Can also render as 2D projection.",
+        "dimensions": {
+            "node_size":  { "required": False, "accepts": ["numeric"],      "label": "Node Size"  },
+            "node_color": { "required": False, "accepts": ["categorical"],  "label": "Node Color" },
+        },
+        "data_shape": "graph",
+        "aggregation": None,
+        "render_mode": "webgl",
+        "webgl_available": True,
+        "default_limit": 1200,
+        # Extra options specific to 3D
+        "options_schema": {
+            "projection": {
+                "type": "select",
+                "label": "Projection Mode",
+                "choices": [
+                    { "value": "3d",  "label": "Full 3D (orbit)" },
+                    { "value": "2d",  "label": "2D Projection (flat)" },
+                ],
+                "default": "3d",
+            },
+            "show_labels": {
+                "type": "boolean",
+                "label": "Show Labels",
+                "default": True,
+            },
+            "particle_speed": {
+                "type": "number",
+                "label": "Particle Speed",
+                "min": 0,
+                "max": 0.05,
+                "step": 0.001,
+                "default": 0.005,
+            },
+        },
     },
 }
 
@@ -203,6 +242,18 @@ DEFAULT_CHARTS = [
         "pinned": True,
         "pin_order": 0,
         "limit": 1500,
+    },
+    {
+        "name": "3D Network Graph",
+        "icon": "🌐",
+        "chart_type": "force_directed_3d",
+        "dimensions": {
+            "node_size":  { "source": "field", "field": "flowrank_score",  "label": "FlowRank",   "scale": "sqrt"   },
+            "node_color": { "source": "field", "field": "community_id",    "label": "Community",  "scale": "linear" },
+        },
+        "filter_tree": { "op": "AND", "conditions": [{ "field": "i_follow_them", "op": "eq", "value": True }] },
+        "pinned": False,
+        "limit": 1200,
     },
     {
         "name": "FlowRank vs Followers",

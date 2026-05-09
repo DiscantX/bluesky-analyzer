@@ -8,35 +8,45 @@
   <link rel="stylesheet" href="/static/css/charts.css">
   <link rel="stylesheet" href="/static/css/info-panel.css">
   <script src="https://d3js.org/d3.v7.min.js"></script>
-  <!-- force-graph for force-directed charts -->
+  <!-- force-graph (2D) for force_directed charts -->
   <script src="https://unpkg.com/force-graph"></script>
 </head>
 <body style="margin:0;overflow:hidden;background:var(--bg)">
 
-<!-- Top bar -->
+<!-- Top bar — auto-hides after 3 s of mouse idle -->
 <header class="view-topbar" id="view-topbar">
   <a href="/charts/{{ alias }}" class="btn btn-ghost btn-sm">← Charts</a>
   <span class="view-chart-name">{{ chart_icon }} {{ chart_name }}</span>
   <div class="topbar-sep"></div>
-  <span id="view-meta" style="font-family:var(--mono);font-size:0.72rem;color:var(--muted)"></span>
+  <span id="view-meta"
+        style="font-family:var(--mono);font-size:0.72rem;color:var(--muted)"></span>
   <a href="/charts/{{ alias }}/{{ chart_id }}/edit" class="btn btn-ghost btn-sm">✏ Edit</a>
-  <button id="pin-btn" class="btn btn-ghost btn-sm" onclick="togglePin()">{{ '📌 Unpin' if pinned else '📌 Pin' }}</button>
+  <button id="pin-btn" class="btn btn-ghost btn-sm" onclick="togglePin()">
+    {{ '📌 Unpin' if pinned else '📌 Pin' }}
+  </button>
 </header>
 
-<!-- Chart canvas -->
-<div id="chart-container" style="position:absolute;top:40px;left:0;right:0;bottom:0;"></div>
+<!-- Chart canvas — fills viewport below the top bar -->
+<div id="chart-container"
+     style="position:absolute;top:40px;left:0;right:0;bottom:0;overflow:hidden;"></div>
 
 {% include 'partials/_info_panel.html' %}
 
 <script>
 const ALIAS    = {{ alias | tojson }};
 const CHART_ID = {{ chart_id | tojson }};
-let PINNED     = {{ 'true' if pinned else 'false' }};
-let _renderer  = null;
+let   PINNED   = {{ 'true' if pinned else 'false' }};
+let   _renderer = null;
 
-async function api(path, opts={}) {
-  const res = await fetch(path, { headers:{'Content-Type':'application/json'}, ...opts });
-  if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || res.statusText);
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || res.statusText);
+  }
   return res.status === 204 ? null : res.json();
 }
 
@@ -46,10 +56,10 @@ async function loadChart() {
   container.innerHTML = '<div class="state-box">Loading…</div>';
 
   try {
-    const data = await api(`/api/charts/${ALIAS}/${CHART_ID}/data`);
+    const data = await api(`/api/charts/${encodeURIComponent(ALIAS)}/${CHART_ID}/data`);
     container.innerHTML = '';
 
-    _renderer = ChartBase.renderChart(container, data, {
+    _renderer = await ChartBase.renderChart(container, data, {
       interactive:  true,
       animated:     true,
       cssVars:      ChartBase.getCSSVars(),
@@ -59,54 +69,80 @@ async function loadChart() {
       },
     });
 
-    const total = data.total || (data.data && data.data.length) || (data.nodes && data.nodes.length) || 0;
-    meta.textContent = `${total.toLocaleString()} data points${data.truncated ? ' (truncated)' : ''}`;
-  } catch(e) {
-    container.innerHTML = `<div class="state-box" style="color:var(--danger)">Failed to load chart: ${e.message}</div>`;
+    const total = data.total
+      || (data.data && data.data.length)
+      || (data.nodes && data.nodes.length)
+      || 0;
+    meta.textContent =
+      `${total.toLocaleString()} data points${data.truncated ? ' (truncated)' : ''}`;
+  } catch (e) {
+    container.innerHTML =
+      `<div class="state-box" style="color:var(--danger)">
+         Failed to load chart: ${e.message}
+       </div>`;
   }
 }
 
 async function togglePin() {
   PINNED = !PINNED;
-  await api(`/api/charts/${ALIAS}/${CHART_ID}/pin?pinned=${PINNED}`, { method:'PATCH' });
+  await api(
+    `/api/charts/${encodeURIComponent(ALIAS)}/${CHART_ID}/pin?pinned=${PINNED}`,
+    { method: 'PATCH' }
+  );
   document.getElementById('pin-btn').textContent = PINNED ? '📌 Unpin' : '📌 Pin';
 }
 
-// Auto-hide topbar on mouse idle
-let hideTimer;
+/* Auto-hide topbar on mouse idle */
+let _hideTimer;
 document.addEventListener('mousemove', () => {
   const bar = document.getElementById('view-topbar');
-  bar.style.opacity = '1';
+  bar.style.opacity   = '1';
   bar.style.transform = 'translateY(0)';
-  clearTimeout(hideTimer);
-  hideTimer = setTimeout(() => {
-    bar.style.opacity = '0';
+  clearTimeout(_hideTimer);
+  _hideTimer = setTimeout(() => {
+    bar.style.opacity   = '0';
     bar.style.transform = 'translateY(-100%)';
   }, 3000);
 });
 
-// Boot
-const scripts = [
+/* Ordered script loading — 3D renderer included */
+const SCRIPTS = [
   '/static/js/renderers/base.js',
   '/static/js/renderers/scatter.js',
   '/static/js/renderers/histogram.js',
   '/static/js/renderers/bar-bubble-timeline.js',
   '/static/js/renderers/hive-pack-force.js',
+  '/static/js/renderers/force-directed-3d.js',
   '/static/js/community-view.js',
   '/static/js/profile-view.js',
   '/static/js/info-panel.js',
 ];
-let loaded = 0;
-scripts.forEach(src => {
-  const s = document.createElement('script');
-  s.src = src;
-  s.onload = () => { if (++loaded === scripts.length) loadChart(); };
-  document.head.appendChild(s);
+
+SCRIPTS.reduce(
+  (p, src) =>
+    p.then(
+      () =>
+        new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src    = src;
+          s.onload = res;
+          s.onerror = rej;
+          document.head.appendChild(s);
+        })
+    ),
+  Promise.resolve()
+)
+.then(loadChart)
+.catch(err => {
+  document.getElementById('chart-container').innerHTML =
+    `<div class="state-box" style="color:var(--danger)">
+       Failed to load renderers: ${err.message}
+     </div>`;
 });
 
-window.addEventListener('resize', () => {
+window.addEventListener('resize', async () => {
   if (_renderer && typeof _renderer.destroy === 'function') _renderer.destroy();
-  loadChart();
+  await loadChart();
 });
 </script>
 </body>
