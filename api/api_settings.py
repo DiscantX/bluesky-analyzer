@@ -27,6 +27,7 @@ class SettingsSchema(BaseModel):
     staleness_tier1_days:               int = Field(7,   ge=1,  le=180)
     staleness_tier0_days:               int = Field(30,  ge=1,  le=365)
     ignore_staleness_threshold_days:    int = Field(0,   ge=0,  le=365)
+    disable_startup_sync:               bool = False
 
     # ── API / Rate limits ─────────────────────────────────────────────────────
     feed_fetch_concurrency:         int   = Field(15,  ge=1,  le=50)
@@ -68,36 +69,41 @@ class SettingsSchema(BaseModel):
         from_attributes = True
 
 
-async def _get_or_create() -> GlobalSettings:
-    # Patch missing GlobalSettings columns for SQLite compatibility
-    # (SQLite lacks formal migrations in generate_schemas(safe=True))
-    conn = connections.get("default")
-    new_cols = [
-        ("turbo_mode_manual",               "INT DEFAULT 0"),
-        ("auto_turbo_enabled",              "INT DEFAULT 1"),
-        ("turbo_inactivity_threshold_mins", "INT DEFAULT 5"),
-        ("turbo_concurrency",               "INT DEFAULT 25"),
-        ("crawl_hydration_concurrency",     "INT DEFAULT 5"),
-        ("profile_analysis_batch_size",      "INT DEFAULT 30"),
-        ("profile_analysis_staleness_days",  "INT DEFAULT 7"),
-        ("turbo_profile_analysis_batch_size", "INT DEFAULT 100"),
-        ("turbo_feed_fetch_concurrency",    "INT DEFAULT 25"),
-        ("profile_analysis_inter_batch_sleep_seconds", "REAL DEFAULT 2.0"),
-        ("profile_analysis_idle_sleep_seconds",       "REAL DEFAULT 60.0"),
-        ("clustering_top_n",                "INT DEFAULT 1000"),
-        ("louvain_max_nodes",               "INT DEFAULT 10000"),
-        ("louvain_resolution",              "REAL DEFAULT 1.0"),
-        ("bio_keyword_weight",              "INT DEFAULT 5"),
-        ("community_keywords_node_sample",  "INT DEFAULT 100"),
-        ("community_keywords_staleness_days", "INT DEFAULT 30"),
-        ("label_prop_max_nodes",            "INT DEFAULT 500000"),
-    ]
-    for col, spec in new_cols:
-        try:
-            await conn.execute_query(f"ALTER TABLE global_settings ADD COLUMN {col} {spec};")
-        except:
-            pass # Column already exists or table not ready
+async def patch_global_settings():
+    """Patch missing GlobalSettings columns for SQLite compatibility."""
+    try:
+        conn = connections.get("default")
+        new_cols = [
+            ("turbo_mode_manual",               "INT DEFAULT 0"),
+            ("auto_turbo_enabled",              "INT DEFAULT 1"),
+            ("turbo_inactivity_threshold_mins", "INT DEFAULT 5"),
+            ("turbo_concurrency",               "INT DEFAULT 25"),
+            ("crawl_hydration_concurrency",     "INT DEFAULT 5"),
+            ("profile_analysis_batch_size",      "INT DEFAULT 30"),
+            ("profile_analysis_staleness_days",  "INT DEFAULT 7"),
+            ("turbo_profile_analysis_batch_size", "INT DEFAULT 100"),
+            ("turbo_feed_fetch_concurrency",    "INT DEFAULT 25"),
+            ("profile_analysis_inter_batch_sleep_seconds", "REAL DEFAULT 2.0"),
+            ("profile_analysis_idle_sleep_seconds",       "REAL DEFAULT 60.0"),
+            ("clustering_top_n",                "INT DEFAULT 1000"),
+            ("louvain_max_nodes",               "INT DEFAULT 10000"),
+            ("louvain_resolution",              "REAL DEFAULT 1.0"),
+            ("bio_keyword_weight",              "INT DEFAULT 5"),
+            ("community_keywords_node_sample",  "INT DEFAULT 100"),
+            ("community_keywords_staleness_days", "INT DEFAULT 30"),
+            ("label_prop_max_nodes",            "INT DEFAULT 500000"),
+            ("disable_startup_sync",            "INT DEFAULT 0"),
+        ]
+        for col, spec in new_cols:
+            try:
+                await conn.execute_query(f"ALTER TABLE global_settings ADD COLUMN {col} {spec};")
+            except:
+                pass # Column already exists or table not ready
+    except Exception as e:
+        logger.warning(f"Settings patch skipped: {e}")
 
+async def _get_or_create() -> GlobalSettings:
+    await patch_global_settings()
     s, _ = await GlobalSettings.get_or_create(id=1)
     return s
 

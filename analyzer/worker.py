@@ -92,23 +92,43 @@ async def worker_loop():
     logger.info("Background worker loop started.")
     await asyncio.sleep(2)
 
-    # ── Startup: launch one persistent analysis loop per account ──────────────
-    accounts = await SavedAccount.all()
-    for account in accounts:
-        logger.info(f"Refreshing crawl priorities for {account.alias}...")
-        await refresh_priorities(account)
+    # ── Startup Logic ────────────────────────────────────────────────────────
+    # Ensure DB is patched and cache is fresh so the check actually works
+    from api.api_settings import patch_global_settings
+    await patch_global_settings()
+    await settings_cache.refresh()
 
-        # Start the persistent profile analysis loop — it runs forever alongside
-        # sync and crawl, independently selecting and analyzing stale profiles.
-        start_profile_analysis_loop(account)
+    startup_sync_disabled = bool(settings_cache.get("disable_startup_sync", False))
+    logger.info(f"Startup check: disable_startup_sync is {startup_sync_disabled}")
 
-        if account.auto_sync_enabled:
-            schedule_sync(account)
-        elif account.auto_crawl_enabled and account.last_synced_at:
-            schedule_crawl(account)
+    if not startup_sync_disabled:
+        accounts = await SavedAccount.all()
+        for account in accounts:
+            logger.info(f"Refreshing crawl priorities for {account.alias}...")
+            await refresh_priorities(account)
+
+            # Start the persistent profile analysis loop — it runs forever alongside
+            # sync and crawl, independently selecting and analyzing stale profiles.
+            start_profile_analysis_loop(account)
+
+            if account.auto_sync_enabled:
+                schedule_sync(account)
+            elif account.auto_crawl_enabled and account.last_synced_at:
+                schedule_crawl(account)
+    else:
+        logger.info("!! STARTUP SUPPRESSION ACTIVE !!: Skipping all initial syncs, crawls, and analysis loops.")
 
     # ── Main sweep loop ───────────────────────────────────────────────────────
     while True:
+        # If startup sync is disabled, we sleep at the start of the first iteration
+        # to ensure no immediate periodic sweep happens either.
+        if startup_sync_disabled:
+            interval = settings_cache.get("worker_sweep_interval_seconds", WORKER_SWEEP_INTERVAL)
+            logger.info(f"Worker will idle for {interval} seconds...")
+            await asyncio.sleep(interval)
+            startup_sync_disabled = False
+            continue
+
         try:
             accounts = await SavedAccount.all()
             now = datetime.now(timezone.utc)

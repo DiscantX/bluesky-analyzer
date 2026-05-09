@@ -21,6 +21,7 @@ from tortoise.expressions import Q
 from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem
 from db.profile_store import upsert_profile_relationship
 from analyzer.fetch import public_fetch_graph, public_fetch_profiles, BskyClient
+from analyzer.analyze import parse_dt
 from analyzer.metrics import run_graph_analysis
 import config
 from settings_cache import settings_cache
@@ -490,7 +491,10 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
 
 
 async def enqueue_crawl_user(owner: SavedAccount, user: AccountRelationship) -> bool:
-    """Create or refresh a pending queue item for an expandable user."""
+    """
+    Create or refresh a pending queue item for an expandable user.
+    Note: For large-scale seeding, use seed_crawl_queue which is bulk-optimized.
+    """
     if not _is_user_expandable(user) or user.crawl_tier >= 2:
         return False
 
@@ -501,34 +505,31 @@ async def enqueue_crawl_user(owner: SavedAccount, user: AccountRelationship) -> 
     priority = await calculate_priority(user)
     profile = await user.profile
 
-    # Use get_or_create to handle potential race conditions atomically
-    queue_item, created = await CrawlQueueItem.get_or_create(
-        account=owner,
-        did=user.did,
-        defaults={
-            "relationship": user,
-            "handle": profile.handle,
-            "priority": priority,
-            "tier": user.crawl_tier,
-            "status": "pending",
-        }
-    )
-
-    if not created:
-        # If the item already existed, update its fields to refresh priority/metadata
-        queue_item.relationship = user
-        queue_item.handle = profile.handle
-        queue_item.priority = priority
-        queue_item.tier = user.crawl_tier
-        if queue_item.status in ("error", "skipped"):
-            queue_item.status = "pending"
-            queue_item.last_error = None
-            queue_item.completed_at = None
-            queue_item.cursor = None
-        await queue_item.save()
+    # Use update_or_create-like logic manually to support status reset
+    item = await CrawlQueueItem.filter(account=owner, did=user.did).first()
+    if not item:
+        await CrawlQueueItem.create(
+            account=owner,
+            did=user.did,
+            relationship=user,
+            handle=profile.handle,
+            priority=priority,
+            tier=user.crawl_tier,
+            status="pending",
+        )
+        return True
+    else:
+        item.relationship = user
+        item.handle = profile.handle
+        item.priority = priority
+        item.tier = user.crawl_tier
+        if item.status in ("error", "skipped"):
+            item.status = "pending"
+            item.last_error = None
+            item.completed_at = None
+            item.cursor = None
+        await item.save()
         return False
-
-    return True
 
 
 async def seed_crawl_queue(owner: SavedAccount, limit: int = 5000, on_progress=None) -> int:
@@ -554,15 +555,72 @@ async def seed_crawl_queue(owner: SavedAccount, limit: int = 5000, on_progress=N
     if on_progress and total > 0:
         await on_progress(f"Seeding queue: 0/{total}...", pct=0)
 
-    created = 0
-    for i, user in enumerate(users):
-        if await enqueue_crawl_user(owner, user):
-            created += 1
-        if on_progress and (i + 1) % 100 == 0:
-            pct = int(((i + 1) / total) * 100)
-            await on_progress(f"Seeding queue: {i+1}/{total}...", pct=pct)
+    total = len(users)
+    if total == 0:
+        return 0
 
-    return created
+    if on_progress:
+        await on_progress(f"Seeding: calculating priorities for {total} candidates...", pct=10)
+
+    # 1. Fetch existing queue items in chunks to respect SQLite variable limits
+    user_dids = [u.did for u in users]
+    existing_items = []
+    FETCH_CHUNK = 900
+    for i in range(0, len(user_dids), FETCH_CHUNK):
+        batch_dids = user_dids[i : i + FETCH_CHUNK]
+        existing_items.extend(await CrawlQueueItem.filter(account=owner, did__in=batch_dids).all())
+
+    existing_by_did = {item.did: item for item in existing_items}
+
+    to_create = []
+    to_update = []
+
+    # 2. Partition into New vs Existing
+    for user in users:
+        priority = await calculate_priority(user)
+        profile = await user.profile
+
+        if user.did in existing_by_did:
+            item = existing_by_did[user.did]
+            item.relationship = user
+            item.handle = profile.handle
+            item.priority = priority
+            item.tier = user.crawl_tier
+            if item.status in ("error", "skipped"):
+                item.status = "pending"
+                item.last_error = None
+                item.completed_at = None
+                item.cursor = None
+            to_update.append(item)
+        else:
+            to_create.append(CrawlQueueItem(
+                account=owner,
+                did=user.did,
+                relationship=user,
+                handle=profile.handle,
+                priority=priority,
+                tier=user.crawl_tier,
+                status="pending",
+            ))
+
+    # 3. Execute batched writes
+    if on_progress:
+        await on_progress(f"Writing {total} items to queue...", pct=60)
+
+    # Chunked writes to avoid SQLite's "too many SQL variables" error
+    WRITE_BATCH = 50 
+    if to_create:
+        for i in range(0, len(to_create), WRITE_BATCH):
+            await CrawlQueueItem.bulk_create(to_create[i : i + WRITE_BATCH], ignore_conflicts=True)
+
+    if to_update:
+        for i in range(0, len(to_update), WRITE_BATCH):
+            await CrawlQueueItem.bulk_update(to_update[i : i + WRITE_BATCH], fields=[
+                "relationship_id", "handle", "priority", "tier", "status",
+                "last_error", "completed_at", "cursor"
+            ])
+
+    return len(to_create)
 
 
 async def claim_crawl_items(owner: SavedAccount, batch_size: int) -> list[CrawlQueueItem]:

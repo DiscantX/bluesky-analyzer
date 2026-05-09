@@ -849,6 +849,7 @@ const SETTINGS_KEYS = [
   "inactivity_threshold_days","repost_ratio_threshold","feed_sample_size","bio_keyword_weight",
   "sync_staleness_hours","worker_sweep_interval_seconds","staleness_tier2_days",
   "staleness_tier1_days","staleness_tier0_days","ignore_staleness_threshold_days",
+  "disable_startup_sync",
   "feed_fetch_concurrency","disable_internal_rate_limits","api_max_retries",
   "api_base_backoff_seconds","api_polite_delay_ms",
   "crawl_concurrency","crawl_hydration_concurrency","min_connection_threshold","crawl_budget_mb",

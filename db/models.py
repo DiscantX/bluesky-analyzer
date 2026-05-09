@@ -29,6 +29,7 @@ class GlobalSettings(Model):
     staleness_tier1_days                = fields.IntField(default=7)
     staleness_tier0_days                = fields.IntField(default=30)
     ignore_staleness_threshold_days     = fields.IntField(default=0)
+    disable_startup_sync                = fields.BooleanField(default=False)
 
     # ── API / Rate limits ─────────────────────────────────────────────────────
     feed_fetch_concurrency          = fields.IntField(default=15)

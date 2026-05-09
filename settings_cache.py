@@ -34,6 +34,7 @@ DEFAULTS: dict[str, Any] = {
     "staleness_tier1_days": 7,
     "staleness_tier0_days": 30,
     "ignore_staleness_threshold_days": 0,
+    "disable_startup_sync": False,
 
     # ── API / Rate limits ─────────────────────────────────────────────────────
     "feed_fetch_concurrency": 15,
@@ -48,15 +49,28 @@ DEFAULTS: dict[str, Any] = {
     "crawl_budget_mb": 1024,
     "crawl_hydration_concurrency": 5,
 
+    # ── Turbo Mode ────────────────────────────────────────────────────────────
+    "turbo_mode_manual": False,
+    "auto_turbo_enabled": True,
+    "turbo_inactivity_threshold_mins": 5,
+    "turbo_concurrency": 25,
+
     # ── Profile analysis loop ─────────────────────────────────────────────────
     "profile_analysis_batch_size": 30,
     "profile_analysis_staleness_days": 7,
+    "turbo_profile_analysis_batch_size": 100,
+    "turbo_feed_fetch_concurrency": 25,
     "profile_analysis_inter_batch_sleep_seconds": 2.0,
     "profile_analysis_idle_sleep_seconds": 60.0,
 
     # ── Graph metrics ─────────────────────────────────────────────────────────
     "clustering_top_n": 1000,
     "louvain_max_nodes": 10000,
+    "louvain_resolution": 1.0,
+    "bio_keyword_weight": 5,
+    "community_keywords_node_sample": 100,
+    "community_keywords_staleness_days": 30,
+    "label_prop_max_nodes": 500000,
 }
 
 

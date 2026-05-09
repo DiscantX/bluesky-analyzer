@@ -170,6 +170,13 @@ def ensure_sqlite_compat_columns() -> None:
             "community_keywords_node_sample":   "INTEGER NOT NULL DEFAULT 100",
             "community_keywords_staleness_days":"INTEGER NOT NULL DEFAULT 30",
             "label_prop_max_nodes":             "INTEGER NOT NULL DEFAULT 500000",
+            "disable_startup_sync":             "INTEGER NOT NULL DEFAULT 0",
+            "turbo_mode_manual":                "INTEGER NOT NULL DEFAULT 0",
+            "auto_turbo_enabled":               "INTEGER NOT NULL DEFAULT 1",
+            "turbo_inactivity_threshold_mins":  "INTEGER NOT NULL DEFAULT 5",
+            "turbo_concurrency":                "INTEGER NOT NULL DEFAULT 25",
+            "turbo_profile_analysis_batch_size":"INTEGER NOT NULL DEFAULT 100",
+            "turbo_feed_fetch_concurrency":     "INTEGER NOT NULL DEFAULT 25",
         }
 
         columns_gs = {row[1] for row in conn.execute("PRAGMA table_info(global_settings)").fetchall()}
