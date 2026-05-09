@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from analyzer.manager import record_user_activity
 from db.models import SavedAccount
 from db.queries import query_users, get_stats
 
@@ -168,6 +169,7 @@ async def list_users(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
+    record_user_activity()
     account = await SavedAccount.filter(alias=alias).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found.")

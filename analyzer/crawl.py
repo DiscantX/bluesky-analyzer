@@ -16,11 +16,11 @@ import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import httpx
+from typing import Optional, List
 from tortoise.expressions import Q
 from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem
 from db.profile_store import upsert_profile_relationship
-from analyzer.fetch import public_fetch_graph, public_fetch_profiles
-from analyzer.analyze import parse_dt
+from analyzer.fetch import public_fetch_graph, public_fetch_profiles, BskyClient
 from analyzer.metrics import run_graph_analysis
 import config
 from settings_cache import settings_cache
@@ -237,16 +237,18 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
         logger.warning(crawl_run.last_message)
         return
 
-    # FIX 2: Hydration semaphore increased from 2 → 5.
-    # Hydration is a read-only operation; the conservative limit of 2 was
-    # unnecessarily throttling throughput by 2-5x.
-    crawl_limit = settings_cache.get("crawl_concurrency", 3)
-    hydrate_limit = settings_cache.get("crawl_hydration_concurrency", 5)
-    
+    # --- Turbo Mode Orchestration ---
+    from analyzer.manager import is_turbo_active
+    turbo_active = is_turbo_active()
+
+    # Load concurrency limits based on power state
+    crawl_limit = settings_cache.get("turbo_concurrency" if turbo_active else "crawl_concurrency", 3)
+    hydrate_limit = settings_cache.get("turbo_concurrency" if turbo_active else "crawl_hydration_concurrency", 5)
+
     if settings_cache.get("disable_internal_rate_limits", False):
         crawl_limit = 100
         hydrate_limit = 100
-
+    
     crawl_semaphore = asyncio.Semaphore(crawl_limit)
     hydration_semaphore = asyncio.Semaphore(hydrate_limit)
 
@@ -267,12 +269,24 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     owner_relationships = await AccountRelationship.filter(owner=owner).all()
     rel_tier_by_did = {rel.did: rel.crawl_tier for rel in owner_relationships}
 
-    async def process_candidate(item: CrawlQueueItem, public_client: httpx.AsyncClient):
+    # Initialize Authenticated Turbo client if needed
+    auth_client: Optional[BskyClient] = None
+    if turbo_active:
+        try:
+            password = config.get_password(owner.alias)
+            if password:
+                auth_client = BskyClient(alias=owner.alias)
+                await auth_client.login(owner.handle, password)
+            logger.info(f"Turbo Mode Active for {owner.alias}: Using authenticated API budget.")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Turbo client for {owner.alias}: {e}. Falling back to public.")
+
+    async def process_candidate(item: CrawlQueueItem, public_client: httpx.AsyncClient, auth_client_shared: Optional[BskyClient] = None):
         async with crawl_semaphore:
             user = await AccountRelationship.filter(owner=owner, did=item.did).prefetch_related("profile").first()
             if not user:
                 item.status = "skipped"
-                item.completed_at = _now()
+                item.completed_at = datetime.now(timezone.utc)
                 item.last_error = "Tracked user no longer exists."
                 await item.save(update_fields=["status", "completed_at", "last_error"])
                 crawl_run.candidates_skipped += 1
@@ -286,7 +300,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     skipped_profile = await user.profile
                     logger.debug(f"Skipping @{skipped_profile.handle} expansion (degree {user.in_subgraph_degree} < threshold)")
                     item.status = "skipped"
-                    item.completed_at = _now()
+                    item.completed_at = datetime.now(timezone.utc)
                     item.last_error = f"Degree {user.in_subgraph_degree} is below threshold."
                     await item.save(update_fields=["status", "completed_at", "last_error"])
                     await asyncio.sleep(0.001) # Yield to event loop
@@ -302,115 +316,102 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             # Collected page_dids across both directions for batched degree update
             all_discovered_dids: list[str] = []
 
-            async def process_page(batch, direction: str):
-                nonlocal session_reqs, session_found
-                page_dids = [f["did"] for f in batch]
+            async def fetch_direction_pages(direction: str, start_cursor: str | None = None, c: httpx.AsyncClient | BskyClient | None = None):
+                """Paginate one direction fully and process each page."""
+                nonlocal session_reqs, session_found, all_discovered_dids
+                cursor = start_cursor
+                while True:
+                    data = await public_fetch_graph(user.did, direction, cursor=cursor, client=c)
+                    batch = data.get(direction, [])
+                    if not batch:
+                        break
 
-                # Determine edges based on direction
-                if direction == "follows":
-                    edge_data = [(user.did, f["did"], f.get("createdAt")) for f in batch]
-                    target_filter = {"followee_did__in": page_dids}
-                else:
-                    edge_data = [(f["did"], user.did, f.get("createdAt")) for f in batch]
-                    target_filter = {"follower_did__in": page_dids}
-
-                all_edges = await FollowEdge.filter(**target_filter).all()
-                existing_edges = {(e.follower_did, e.followee_did) for e in all_edges}
-
-                new_edges = [
-                    FollowEdge(follower_did=s, followee_did=t, discovered_at=parse_dt(ts) or _now())
-                    for s, t, ts in edge_data
-                    if (s, t) not in existing_edges
-                ]
-
-                if new_edges:
-                    await FollowEdge.bulk_create(new_edges, ignore_conflicts=True)
-                    await asyncio.sleep(0.001) # Yield to event loop after bulk write
-
-                for f in batch:
-                    target_did = f["did"]
-                    target_handle = f["handle"]
-
-                    if target_did not in rel_tier_by_did or rel_tier_by_did[target_did] == 0:
-                        profile, target_user = await upsert_profile_relationship(
-                            owner,
-                            {
-                                "did": target_did,
-                                "handle": target_handle,
-                                "display_name": f.get("displayName", ""),
-                                "avatar_url": f.get("avatar", ""),
-                                "profile_url": f"https://bsky.app/profile/{target_handle}",
-                                "discovered_via": "graph_crawl",
-                                "crawl_tier": 0,
-                                "crawl_pending_fields": json.dumps(["feed_sample", "relationship_flags"]),
-                            },
-                        )
+                    page_dids = [f["did"] for f in batch]
+                    
+                    # Determine edges based on direction
+                    if direction == "follows":
+                        edge_data = [(user.did, f["did"], f.get("createdAt")) for f in batch]
+                        target_filter = {"followee_did__in": page_dids, "follower_did": user.did}
                     else:
-                        target_user = await AccountRelationship.filter(owner=owner, did=target_did).first()
+                        edge_data = [(f["did"], user.did, f.get("createdAt")) for f in batch]
+                        target_filter = {"follower_did__in": page_dids, "followee_did": user.did}
 
-                    if target_user.first_seen_at and target_user.first_seen_at >= _now() - timedelta(seconds=5):
-                        from analyzer.manager import global_found_tracker
-                        global_found_tracker.record()
-                        session_found += 1
+                    all_edges = await FollowEdge.filter(**target_filter).all()
+                    existing_edges = {(e.follower_did, e.followee_did) for e in all_edges}
 
-                    await enqueue_crawl_user(owner, target_user)
+                    new_edges = [
+                        FollowEdge(follower_did=s, followee_did=t, discovered_at=parse_dt(ts) or datetime.now(timezone.utc))
+                        for s, t, ts in edge_data
+                        if (s, t) not in existing_edges
+                    ]
 
-                all_discovered_dids.extend(page_dids)
-                await hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit, client=public_client)
+                    if new_edges:
+                        await FollowEdge.bulk_create(new_edges, ignore_conflicts=True)
 
-                # FIX 4: Degree update is now deferred to a single batch call
-                # after all pages are processed (see below). The per-page call
-                # here is intentionally removed.
+                    for f in batch:
+                        target_did = f["did"]
+                        target_handle = f["handle"]
 
-                await emit(f"Discovered {len(batch)} from @{user_profile.handle}")
+                        if target_did not in rel_tier_by_did or rel_tier_by_did[target_did] == 0:
+                            _, target_user = await upsert_profile_relationship(
+                                owner,
+                                {
+                                    "did": target_did,
+                                    "handle": target_handle,
+                                    "display_name": f.get("displayName", ""),
+                                    "avatar_url": f.get("avatar", ""),
+                                    "profile_url": f"https://bsky.app/profile/{target_handle}",
+                                    "discovered_via": "graph_crawl",
+                                    "crawl_tier": 0,
+                                    "crawl_pending_fields": json.dumps(["feed_sample", "relationship_flags"]),
+                                },
+                            )
+                        else:
+                            target_user = await AccountRelationship.filter(owner=owner, did=target_did).first()
+
+                        if target_user and target_user.first_seen_at and target_user.first_seen_at >= datetime.now(timezone.utc) - timedelta(seconds=5):
+                            from analyzer.manager import global_found_tracker
+                            global_found_tracker.record()
+                            session_found += 1
+
+                        await enqueue_crawl_user(owner, target_user)
+
+                    all_discovered_dids.extend(page_dids)
+                    await hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit, client=c)
+
+                    next_cursor = data.get("cursor")
+                    if direction == "follows":
+                        item.cursor = next_cursor
+
+                    item.pages_fetched += 1
+                    item.edges_found += len(batch)
+                    await item.save(update_fields=["cursor", "pages_fetched", "edges_found"])
+
+                    await emit(f"Discovered {len(batch)} {direction} for @{user_profile.handle}", req_inc=1)
+
+                    if not next_cursor:
+                        break
+
+                    cursor = next_cursor
+                    if not settings_cache.get("disable_internal_rate_limits", False):
+                        await asyncio.sleep(0.01)
 
             try:
                 # FIX 6: Fetch follows and followers CONCURRENTLY instead of sequentially.
-                # Each direction is independently paginated; they don't share state.
-                # This delivers ~1-2x speedup per candidate, especially for accounts
-                # with many followers.
-
-                async def fetch_direction_pages(direction: str, start_cursor: str | None = None, c: httpx.AsyncClient = None):
-                    """Paginate one direction fully and process each page."""
-                    cursor = start_cursor
-                    while True:
-                        data = await public_fetch_graph(user.did, direction, cursor=cursor, client=c)
-                        batch = data.get(direction, [])
-                        if batch:
-                            await process_page(batch, direction)
-
-                        next_cursor = data.get("cursor")
-                        if direction == "follows":
-                            item.cursor = next_cursor
-
-                        item.pages_fetched += 1
-                        item.edges_found += len(batch)
-                        await asyncio.sleep(0.001) # Yield to event loop before saving
-                        await item.save(update_fields=["cursor", "pages_fetched", "edges_found"])
-
-                        await emit(f"Fetching {direction} from @{user_profile.handle}...", req_inc=1)
-
-                        if not next_cursor or not batch:
-                            await emit(f"Finished {direction} from @{user_profile.handle}", req_inc=1)
-                            break
-
-                        cursor = next_cursor
-                        if not settings_cache.get("disable_internal_rate_limits", False):
-                            await asyncio.sleep(0.01)
-
+                # Each direction is independently paginated using the best available client.
                 # Run both directions concurrently
+                client_to_use = auth_client_shared or public_client
                 start_cursor = item.cursor  # Resume follows from where we left off
                 await asyncio.gather(
-                    fetch_direction_pages("follows", start_cursor, public_client),
-                    fetch_direction_pages("followers", None, public_client),
+                    fetch_direction_pages("follows", start_cursor, client_to_use),
+                    fetch_direction_pages("followers", None, client_to_use),
                 )
 
                 # FIX 4: Now that all pages across both directions are done,
                 # run a single batched degree update for every discovered DID.
                 if all_discovered_dids:
                     unique_discovered = list(dict.fromkeys(all_discovered_dids))
-                    # Process in chunks to avoid SQLite IN-clause limits
-                    CHUNK = 32766
+                    CHUNK = 500
                     for i in range(0, len(unique_discovered), CHUNK):
                         chunk = unique_discovered[i:i + CHUNK]
                         await _batch_update_degrees(owner, chunk, tracked_dids)
@@ -421,11 +422,10 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 if current_db_size_mb >= crawl_budget_mb:
                     raise CrawlBudgetExceeded(f"Database size ({current_db_size_mb:.1f} MB) exceeds budget ({crawl_budget_mb} MB).")
 
-
             except Exception as e:
                 logger.exception(f"Failed to expand @{user_profile.handle}: {e}")
                 item.status = "error"
-                item.completed_at = _now()
+                item.completed_at = datetime.now(timezone.utc)
                 item.last_error = str(e)
                 await item.save(update_fields=["status", "completed_at", "last_error"])
                 await asyncio.sleep(0.001) # Yield to event loop
@@ -434,19 +434,19 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                 await emit(f"Failed to expand @{user_profile.handle}: {e}")
                 return
 
-            user.last_crawled_at = _now()
+            user.last_crawled_at = datetime.now(timezone.utc)
             await user.save()
             await asyncio.sleep(0.001) # Yield to event loop
             item.status = "done"
             item.cursor = None
-            item.completed_at = _now()
+            item.completed_at = datetime.now(timezone.utc)
             await item.save(update_fields=["status", "cursor", "completed_at"])
             await asyncio.sleep(0.001) # Yield to event loop
             crawl_run.candidates_completed += 1
             await crawl_run.save(update_fields=["candidates_completed", "request_count", "discovered_count", "last_message"])
    # Process all candidates concurrently using a shared HTTP client
     async with httpx.AsyncClient(timeout=30.0) as public_client:
-        tasks = [process_candidate(item, public_client) for item in candidates] # type: ignore
+        tasks = [process_candidate(item, public_client, auth_client) for item in candidates] # type: ignore
         
         # Execute candidates concurrently. Errors are returned in the list.
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -456,8 +456,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             if isinstance(r, CrawlBudgetExceeded):
                 crawl_run.status = "paused"
                 crawl_run.last_message = str(r)
-                crawl_run.error_message = str(r)
-                crawl_run.finished_at = _now()
+                crawl_run.finished_at = datetime.now(timezone.utc)
                 await crawl_run.save(update_fields=["status", "last_message", "error_message", "finished_at"])
                 await emit(crawl_run.last_message, 100)
                 logger.warning(crawl_run.last_message)
@@ -599,52 +598,68 @@ async def hydrate_stubs(
     hydrated_at = _now()
     BATCH_SIZE = 25
 
-    for i in range(0, total, BATCH_SIZE):
-        batch_dids = unique_dids[i : i + BATCH_SIZE]
+    async def _process_chunk(chunk_dids: list[str]):
+        nonlocal hydrated
         async with semaphore:
-            profiles = await public_fetch_profiles(batch_dids, client=client)
+            profiles = await public_fetch_profiles(chunk_dids, client=client)
+            if not profiles:
+                return
 
-        profiles_to_update = []
-        relationships_to_update = []
-        queue_items_to_update = []
+            profiles_to_update = []
+            relationships_to_update = []
+            queue_items_to_update = []
 
-        for profile in profiles:
-            did = profile.get("did")
-            if not did:
-                continue
+            for profile in profiles:
+                did = profile.get("did")
+                if not did:
+                    continue
 
-            user = await AccountRelationship.filter(owner=owner, did=did).prefetch_related("profile").first()
-            if not user:
-                continue
+                user = await AccountRelationship.filter(owner=owner, did=did).prefetch_related("profile").first()
+                if not user:
+                    continue
 
-            shared_profile = await user.profile
-            handle = profile.get("handle") or shared_profile.handle
-            shared_profile.handle = handle
-            shared_profile.display_name = profile.get("displayName", shared_profile.display_name) or ""
-            shared_profile.avatar_url = profile.get("avatar", shared_profile.avatar_url) or ""
-            shared_profile.profile_url = f"https://bsky.app/profile/{handle}"
-            shared_profile.followers_count = _profile_value(profile, "followers_count", "followersCount")
-            shared_profile.follows_count = _profile_value(profile, "follows_count", "followsCount")
-            shared_profile.posts_count = _profile_value(profile, "posts_count", "postsCount")
-            shared_profile.description = profile.get("description")
-            shared_profile.banner_url = profile.get("banner")
-            shared_profile.account_created_at = parse_dt(profile.get("createdAt"))
-            shared_profile.labels = json.dumps([l.get("val") for l in profile.get("labels", [])]) if profile.get("labels") else None
-            shared_profile.last_hydrated_at = hydrated_at
-            profiles_to_update.append(shared_profile)
+                shared_profile = await user.profile
+                handle = profile.get("handle") or shared_profile.handle
+                shared_profile.handle = handle
+                shared_profile.display_name = profile.get("displayName", shared_profile.display_name) or ""
+                shared_profile.avatar_url = profile.get("avatar", shared_profile.avatar_url) or ""
+                shared_profile.profile_url = f"https://bsky.app/profile/{handle}"
+                shared_profile.followers_count = _profile_value(profile, "followers_count", "followersCount")
+                shared_profile.follows_count = _profile_value(profile, "follows_count", "followsCount")
+                shared_profile.posts_count = _profile_value(profile, "posts_count", "postsCount")
+                shared_profile.description = profile.get("description")
+                shared_profile.banner_url = profile.get("banner")
+                shared_profile.account_created_at = parse_dt(profile.get("createdAt"))
+                shared_profile.labels = json.dumps([l.get("val") for l in profile.get("labels", [])]) if profile.get("labels") else None
+                shared_profile.last_hydrated_at = hydrated_at
+                profiles_to_update.append(shared_profile)
 
-            user.crawl_pending_fields = json.dumps(["feed_sample", "relationship_flags"])
-            user.crawl_priority = await calculate_priority(user)
-            relationships_to_update.append(user)
+                user.crawl_pending_fields = json.dumps(["feed_sample", "relationship_flags"])
+                user.crawl_priority = await calculate_priority(user)
+                relationships_to_update.append(user)
 
-            item = await CrawlQueueItem.filter(account=owner, did=did).first()
-            if item:
-                item.handle = handle
-                item.priority = user.crawl_priority
-                item.hydrated_at = hydrated_at
-                queue_items_to_update.append(item)
+                item = await CrawlQueueItem.filter(account=owner, did=did).first()
+                if item:
+                    item.handle = handle
+                    item.priority = user.crawl_priority
+                    item.hydrated_at = hydrated_at
+                    queue_items_to_update.append(item)
 
-            hydrated += 1
+                hydrated += 1
+
+            # Internal chunk logging
+            if on_progress:
+                first_handle = profiles[0].get("handle", "...") if profiles else "..."
+                await on_progress(f"Hydrated chunk starting @{first_handle}", req_inc=1)
+
+            return profiles_to_update, relationships_to_update, queue_items_to_update
+
+    chunks = [unique_dids[i : i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
+    results = await asyncio.gather(*[_process_chunk(c) for c in chunks])
+
+    for res in results:
+        if not res: continue
+        profiles_to_update, relationships_to_update, queue_items_to_update = res
 
         if profiles_to_update:
             task = Profile.bulk_update(profiles_to_update, fields=[
@@ -665,12 +680,6 @@ async def hydrate_stubs(
             task = CrawlQueueItem.bulk_update(queue_items_to_update, fields=["handle", "priority", "hydrated_at"])
             if write_queue: await write_queue.put(task)
             else: await task
-
-        if on_progress:
-            current = min(i + BATCH_SIZE, total)
-            pct = int((current / total) * 100)
-            first_handle = profiles[0].get("handle", "...") if profiles else "..."
-            await on_progress(f"Hydrating: @{first_handle} ({current}/{total})...", pct, req_inc=1)
 
     return hydrated
 

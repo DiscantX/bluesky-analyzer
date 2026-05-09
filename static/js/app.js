@@ -15,6 +15,7 @@ const state = {
   statusTimer: null,
   lastUserFetch: 0,
   settings: {},
+  turboModeManual: false,
   crawlBudgetMb: 0,
   currentDbSizeMb: 0,
 
@@ -205,6 +206,15 @@ function renderStats() {
   el("stat-pending").textContent    = fmt(s.pending);
   el("stat-req-rate").textContent   = (s.req_rate  || 0) + "/m";
   el("stat-found-rate").textContent = (s.found_rate || 0) + "/m";
+
+  // Turbo Mode UI update
+  const turboBox = el("turbo-status-box");
+  if (turboBox) {
+    const isActive = state.turboModeManual;
+    turboBox.classList.toggle("active", isActive);
+    const label = el("turbo-status-label");
+    if (label) label.textContent = isActive ? "Turbo On" : "Turbo Off";
+  }
 
   if (state.crawlBudgetMb > 0) {
     const pctUsed  = (state.currentDbSizeMb / state.crawlBudgetMb) * 100;
@@ -498,6 +508,10 @@ async function reconcileOperationStatus() {
     state.crawlBudgetMb    = status.crawl_budget_mb    ?? 0;
     state.currentDbSizeMb  = status.current_db_size_mb ?? 0;
 
+    if (status.turbo_mode_manual !== undefined) {
+      state.turboModeManual = status.turbo_mode_manual;
+    }
+
     if (sync?.status === "running" && status.sync_running && !state.syncing) {
       state.syncing = true;
       el("sync-btn").disabled = true;
@@ -602,6 +616,27 @@ async function switchAccount(alias) {
   await reconcileOperationStatus();
 }
 
+async function toggleTurboManual() {
+  const newState = !state.turboModeManual;
+  try {
+    // Update local state for immediate feedback
+    state.turboModeManual = newState;
+    renderStats();
+    
+    // Persist to server
+    await api("/api/settings/", {
+      method: "PATCH",
+      body: JSON.stringify({ turbo_mode_manual: newState })
+    });
+    toast(`Turbo Mode ${newState ? "Enabled" : "Disabled"}`);
+  } catch (e) {
+    state.turboModeManual = !newState; // Rollback on failure
+    renderStats();
+    logError("toggleTurboManual failed:", e);
+    toast("Failed to toggle Turbo Mode", "error");
+  }
+}
+
 async function toggleAutoCrawl(enabled) {
   if (!state.activeAlias) return;
   try {
@@ -686,6 +721,9 @@ function endSync() {
 function showSyncBar(message, pct) {
   el("sync-bar").classList.add("visible");
   el("sync-bar-text").textContent = message;
+  const progressFill = el("progress-fill");
+  if (progressFill) progressFill.classList.toggle("turbo-active", state.turboModeManual);
+
   if (pct != null) el("progress-fill").style.width = pct + "%";
 }
 
@@ -814,6 +852,7 @@ const SETTINGS_KEYS = [
   "feed_fetch_concurrency","disable_internal_rate_limits","api_max_retries",
   "api_base_backoff_seconds","api_polite_delay_ms",
   "crawl_concurrency","crawl_hydration_concurrency","min_connection_threshold","crawl_budget_mb",
+  "turbo_mode_manual", "auto_turbo_enabled", "turbo_inactivity_threshold_mins", "turbo_concurrency",
   "profile_analysis_batch_size","profile_analysis_staleness_days",
   "profile_analysis_inter_batch_sleep_seconds","profile_analysis_idle_sleep_seconds",
   "clustering_top_n","louvain_max_nodes","louvain_resolution",

@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from api.chart_registry import CHART_REGISTRY, DEFAULT_CHARTS, FIELD_LABELS
 from db.chart_queries import query_chart_data
+from analyzer.manager import record_user_activity
 from db.models import SavedAccount
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ async def _seed_default_charts(owner: SavedAccount) -> None:
 @router.get("/registry")
 async def get_registry():
     """Return the full chart type registry for the builder UI."""
+    record_user_activity()
     return {
         "types":        CHART_REGISTRY,
         "field_labels": FIELD_LABELS,
@@ -107,6 +109,7 @@ async def get_registry():
 
 @router.get("/{alias}")
 async def list_charts(alias: str, pinned_only: bool = Query(False)):
+    record_user_activity()
     from db.models import ChartDefinition
     owner = await SavedAccount.get_or_none(alias=alias)
     if not owner:
@@ -127,6 +130,7 @@ async def list_charts(alias: str, pinned_only: bool = Query(False)):
 
 @router.post("/{alias}", status_code=201)
 async def create_chart(alias: str, data: ChartDefinitionSchema):
+    record_user_activity()
     from db.models import ChartDefinition
     owner = await SavedAccount.get_or_none(alias=alias)
     if not owner:
@@ -144,6 +148,7 @@ async def create_chart(alias: str, data: ChartDefinitionSchema):
 
 @router.get("/{alias}/{chart_id}")
 async def get_chart(alias: str, chart_id: int):
+    record_user_activity()
     from db.models import ChartDefinition
     owner = await SavedAccount.get_or_none(alias=alias)
     if not owner:
@@ -158,6 +163,7 @@ async def get_chart(alias: str, chart_id: int):
 
 @router.put("/{alias}/{chart_id}")
 async def update_chart(alias: str, chart_id: int, data: ChartDefinitionSchema):
+    record_user_activity()
     from db.models import ChartDefinition
     owner = await SavedAccount.get_or_none(alias=alias)
     if not owner:
@@ -176,6 +182,7 @@ async def update_chart(alias: str, chart_id: int, data: ChartDefinitionSchema):
 
 @router.delete("/{alias}/{chart_id}", status_code=204)
 async def delete_chart(alias: str, chart_id: int):
+    record_user_activity()
     from db.models import ChartDefinition
     owner = await SavedAccount.get_or_none(alias=alias)
     if not owner:
@@ -188,6 +195,7 @@ async def delete_chart(alias: str, chart_id: int):
 
 @router.patch("/{alias}/{chart_id}/pin")
 async def toggle_pin(alias: str, chart_id: int, pinned: bool = Query(...)):
+    record_user_activity()
     from db.models import ChartDefinition
     owner = await SavedAccount.get_or_none(alias=alias)
     if not owner:
@@ -214,6 +222,7 @@ async def toggle_pin(alias: str, chart_id: int, pinned: bool = Query(...)):
 @router.get("/{alias}/{chart_id}/data")
 async def get_chart_data(alias: str, chart_id: int, thumbnail: bool = Query(False)):
     """Execute a saved chart definition and return structured data."""
+    record_user_activity()
     from db.models import ChartDefinition
     owner = await SavedAccount.get_or_none(alias=alias)
     if not owner:
@@ -241,6 +250,7 @@ async def get_chart_data(alias: str, chart_id: int, thumbnail: bool = Query(Fals
 @router.post("/{alias}/preview")
 async def preview_chart(alias: str, chart_def: dict):
     """Execute an unsaved chart definition and return structured data."""
+    record_user_activity()
     owner = await SavedAccount.get_or_none(alias=alias)
     if not owner:
         raise HTTPException(status_code=404, detail="Account not found")

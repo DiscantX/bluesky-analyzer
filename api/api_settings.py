@@ -7,7 +7,9 @@ On save: persists to DB and refreshes the in-memory SettingsCache.
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from db.models import GlobalSettings
+from analyzer.manager import record_user_activity
 from settings_cache import settings_cache
+from tortoise import connections
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -39,10 +41,18 @@ class SettingsSchema(BaseModel):
     crawl_budget_mb:                int = Field(1024, ge=100, le=102400)
     crawl_hydration_concurrency:    int = Field(5,    ge=1,  le=20)
 
+    # ── Turbo Mode ────────────────────────────────────────────────────────────
+    turbo_mode_manual:               bool  = False
+    auto_turbo_enabled:              bool  = True
+    turbo_inactivity_threshold_mins: int   = Field(5,  ge=1,  le=60)
+    turbo_concurrency:               int   = Field(25, ge=1,  le=100)
+
     # ── Profile analysis loop ─────────────────────────────────────────────────
-    profile_analysis_batch_size:                int   = Field(30,  ge=1,  le=500)
-    profile_analysis_staleness_days:            int   = Field(7,   ge=1,  le=365)
-    profile_analysis_inter_batch_sleep_seconds: float = Field(2.0, ge=0.0, le=60.0)
+    profile_analysis_batch_size:                int   = Field(30,   ge=1,   le=500)
+    profile_analysis_staleness_days:            int   = Field(7,    ge=1,   le=365)
+    turbo_profile_analysis_batch_size:          int   = Field(100,  ge=1,   le=500)
+    turbo_feed_fetch_concurrency:               int   = Field(25,   ge=1,   le=100)
+    profile_analysis_inter_batch_sleep_seconds: float = Field(2.0,  ge=0.0, le=60.0)
     profile_analysis_idle_sleep_seconds:        float = Field(60.0, ge=5.0, le=3600.0)
 
     # ── Graph metrics ─────────────────────────────────────────────────────────
@@ -59,21 +69,57 @@ class SettingsSchema(BaseModel):
 
 
 async def _get_or_create() -> GlobalSettings:
+    # Patch missing GlobalSettings columns for SQLite compatibility
+    # (SQLite lacks formal migrations in generate_schemas(safe=True))
+    conn = connections.get("default")
+    new_cols = [
+        ("turbo_mode_manual",               "INT DEFAULT 0"),
+        ("auto_turbo_enabled",              "INT DEFAULT 1"),
+        ("turbo_inactivity_threshold_mins", "INT DEFAULT 5"),
+        ("turbo_concurrency",               "INT DEFAULT 25"),
+        ("crawl_hydration_concurrency",     "INT DEFAULT 5"),
+        ("profile_analysis_batch_size",      "INT DEFAULT 30"),
+        ("profile_analysis_staleness_days",  "INT DEFAULT 7"),
+        ("turbo_profile_analysis_batch_size", "INT DEFAULT 100"),
+        ("turbo_feed_fetch_concurrency",    "INT DEFAULT 25"),
+        ("profile_analysis_inter_batch_sleep_seconds", "REAL DEFAULT 2.0"),
+        ("profile_analysis_idle_sleep_seconds",       "REAL DEFAULT 60.0"),
+        ("clustering_top_n",                "INT DEFAULT 1000"),
+        ("louvain_max_nodes",               "INT DEFAULT 10000"),
+        ("louvain_resolution",              "REAL DEFAULT 1.0"),
+        ("bio_keyword_weight",              "INT DEFAULT 5"),
+        ("community_keywords_node_sample",  "INT DEFAULT 100"),
+        ("community_keywords_staleness_days", "INT DEFAULT 30"),
+        ("label_prop_max_nodes",            "INT DEFAULT 500000"),
+    ]
+    for col, spec in new_cols:
+        try:
+            await conn.execute_query(f"ALTER TABLE global_settings ADD COLUMN {col} {spec};")
+        except:
+            pass # Column already exists or table not ready
+
     s, _ = await GlobalSettings.get_or_create(id=1)
     return s
 
 
 @router.get("/", response_model=SettingsSchema)
 async def get_settings():
+    record_user_activity()
     return await _get_or_create()
 
 
 @router.patch("/", response_model=SettingsSchema)
 async def update_settings(data: SettingsSchema):
+    record_user_activity()
     s = await _get_or_create()
-    for field, value in data.model_dump().items():
+    
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
         setattr(s, field, value)
-    await s.save()
+        
+    if update_data:
+        await s.save(update_fields=list(update_data.keys()))
+
     # Refresh in-memory cache immediately so running loops pick up new values
     await settings_cache.refresh()
     return s

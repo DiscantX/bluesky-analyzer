@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional, Any
 from db.models import SavedAccount, FilterSet, CustomVariable
+from analyzer.manager import record_user_activity
 
 router = APIRouter(prefix="/api/filters", tags=["filters"])
 
@@ -21,6 +22,7 @@ class CustomVariableSchema(BaseModel):
 
 @router.get("/{alias}", response_model=List[dict])
 async def list_filters(alias: str):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -40,6 +42,7 @@ async def list_filters(alias: str):
 
 @router.post("/{alias}")
 async def create_filter(alias: str, data: FilterSetSchema):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -52,6 +55,7 @@ async def create_filter(alias: str, data: FilterSetSchema):
 
 @router.delete("/{alias}/{filter_id}")
 async def delete_filter(alias: str, filter_id: int):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -79,6 +83,7 @@ async def delete_filter(alias: str, filter_id: int):
 
 @router.put("/{alias}/{filter_id}")
 async def update_filter(alias: str, filter_id: int, data: FilterSetSchema):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -99,6 +104,7 @@ async def update_filter(alias: str, filter_id: int, data: FilterSetSchema):
 
 @router.get("/{alias}/variables", response_model=List[dict])
 async def list_variables(alias: str):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -111,6 +117,7 @@ async def list_variables(alias: str):
 
 @router.post("/{alias}/variables")
 async def create_variable(alias: str, data: CustomVariableSchema):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -127,6 +134,7 @@ async def create_variable(alias: str, data: CustomVariableSchema):
 
 @router.put("/{alias}/variables/{var_id}")
 async def update_variable(alias: str, var_id: int, data: CustomVariableSchema):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -142,6 +150,7 @@ async def update_variable(alias: str, var_id: int, data: CustomVariableSchema):
 
 @router.delete("/{alias}/variables/{var_id}")
 async def delete_variable(alias: str, var_id: int):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")

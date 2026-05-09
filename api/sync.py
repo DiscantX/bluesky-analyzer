@@ -19,11 +19,12 @@ from fastapi.responses import StreamingResponse
 import config
 import logging
 from analyzer.client import BskyClient
+from settings_cache import settings_cache
 from analyzer.sync import run_sync
 from analyzer.crawl import crawl_step
 from analyzer.crawl import _get_db_size_mb # Import for current DB size
 from db.models import SavedAccount, SyncRun, CrawlRun, CrawlQueueItem
-from analyzer.manager import running_tasks, bus, is_running, is_operation_running, task_key
+from analyzer.manager import running_tasks, bus, is_running, is_operation_running, task_key, record_user_activity
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sync", tags=["sync"])
@@ -31,6 +32,7 @@ router = APIRouter(prefix="/api/sync", tags=["sync"])
 @router.post("/{alias}", status_code=202)
 async def trigger_sync(alias: str):
     """Kick off a background sync for the given account alias."""
+    record_user_activity()
     if is_operation_running(alias, "sync"):
         raise HTTPException(status_code=409, detail="Sync already in progress.")
 
@@ -63,6 +65,7 @@ async def trigger_sync(alias: str):
 @router.post("/{alias}/crawl", status_code=202)
 async def trigger_crawl(alias: str, batch_size: int = 20):
     """Trigger a network expansion crawl step."""
+    record_user_activity()
     if is_operation_running(alias, "crawl"):
         raise HTTPException(status_code=409, detail="Crawl already in progress.")
 
@@ -115,6 +118,7 @@ async def trigger_crawl(alias: str, batch_size: int = 20):
 @router.post("/{alias}/crawl/stop")
 async def stop_crawl(alias: str):
     """Stop the active network crawl and leave queue state resumable."""
+    record_user_activity()
     account = await SavedAccount.filter(alias=alias).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found.")
@@ -142,6 +146,8 @@ async def sync_stream(alias: str, operation: str | None = None):
     Server-Sent Events stream — browser connects here to receive live progress.
     Closes automatically when a 'done' or 'error' event is received.
     """
+    # SSE connections represent an active UI presence
+    record_user_activity()
     queue = bus.subscribe(alias, operation)
 
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -176,6 +182,7 @@ async def sync_status(alias: str):
     run = await SyncRun.filter(account__alias=alias).order_by("-started_at").first()
     crawl_run = await CrawlRun.filter(account__alias=alias).order_by("-started_at").first()
 
+    turbo_mode = settings_cache.get("turbo_mode_manual", False)
     sync_payload = {"status": "never_synced"}
     if run:
         live_sync = bus.last_event.get((alias, "sync"), {})
@@ -227,9 +234,10 @@ async def sync_status(alias: str):
             "is_running": is_operation_running(alias, "crawl"),
         }
 
-    return {
+    response = {
         "req_rate": global_req_tracker.get_rate(),
         "found_rate": global_found_tracker.get_rate(),
+        "turbo_mode_manual": turbo_mode,
         **sync_payload,
         "is_running": is_running(alias),
         "sync_running": is_operation_running(alias, "sync"),

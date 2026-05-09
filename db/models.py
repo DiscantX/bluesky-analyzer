@@ -41,11 +41,19 @@ class GlobalSettings(Model):
     crawl_concurrency               = fields.IntField(default=3)
     min_connection_threshold        = fields.IntField(default=3)
     crawl_budget_mb                 = fields.IntField(default=1024)
+
+    # ── Turbo Mode ────────────────────────────────────────────────────────────
+    turbo_mode_manual               = fields.BooleanField(default=False)
+    auto_turbo_enabled              = fields.BooleanField(default=True)
+    turbo_inactivity_threshold_mins = fields.IntField(default=5)
+    turbo_concurrency               = fields.IntField(default=25)
     crawl_hydration_concurrency     = fields.IntField(default=5)
 
     # ── Profile analysis loop ─────────────────────────────────────────────────
     profile_analysis_batch_size             = fields.IntField(default=30)
     profile_analysis_staleness_days         = fields.IntField(default=7)
+    turbo_profile_analysis_batch_size       = fields.IntField(default=100)
+    turbo_feed_fetch_concurrency            = fields.IntField(default=25)
     profile_analysis_inter_batch_sleep_seconds = fields.FloatField(default=2.0)
     profile_analysis_idle_sleep_seconds     = fields.FloatField(default=60.0)
 
@@ -53,6 +61,10 @@ class GlobalSettings(Model):
     clustering_top_n    = fields.IntField(default=1000)
     louvain_max_nodes   = fields.IntField(default=10000)
     louvain_resolution  = fields.FloatField(default=1.0)
+    bio_keyword_weight                 = fields.IntField(default=5)
+    community_keywords_node_sample     = fields.IntField(default=100)
+    community_keywords_staleness_days  = fields.IntField(default=30)
+    label_prop_max_nodes               = fields.IntField(default=500000)
 
     class Meta:
         table = "global_settings"

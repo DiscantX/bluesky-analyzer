@@ -100,6 +100,7 @@ async def fetch_feeds_concurrent(
     client: BskyClient,
     dids: list[str],
     limit_per_actor: int = 100,
+    semaphore: asyncio.Semaphore | None = None,
     progress_callback=None,
 ) -> AsyncGenerator[tuple[str, list], None]:
     """
@@ -111,7 +112,11 @@ async def fetch_feeds_concurrent(
     completed = 0
 
     async def _fetch_one(did: str) -> tuple[str, list]:
-        items = await fetch_author_feed(client, did, limit=limit_per_actor)
+        if semaphore:
+            async with semaphore:
+                items = await fetch_author_feed(client, did, limit=limit_per_actor)
+        else:
+            items = await fetch_author_feed(client, did, limit=limit_per_actor)
         return did, items
 
     tasks = [asyncio.create_task(_fetch_one(did)) for did in dids]
@@ -129,18 +134,24 @@ async def public_fetch_graph(
     collection: str = "follows",
     limit: int = 100,
     cursor: str | None = None,
-    client: httpx.AsyncClient | None = None
+    client: httpx.AsyncClient | BskyClient | None = None
 ) -> dict:
     """
-    Fetch follows or followers using the unauthenticated public AppView.
-    Used for graph crawl to save authenticated API budget.
+    Fetch follows or followers. If an authenticated BskyClient is provided,
+    uses the authenticated session (Turbo mode). Otherwise, uses the public AppView.
     """
+    if isinstance(client, BskyClient):
+        # Use authenticated SDK methods for Turbo mode
+        method = client.get_follows if collection == "follows" else client.get_followers
+        resp = await method(actor=actor_did, limit=limit, cursor=cursor)
+        return {"cursor": getattr(resp, "cursor", None), collection: [f.model_dump() if hasattr(f, 'model_dump') else f for f in getattr(resp, collection, [])]}
+
     url = f"https://public.api.bsky.app/xrpc/app.bsky.graph.get{collection.capitalize()}"
     params = {"actor": actor_did, "limit": limit}
     if cursor:
         params["cursor"] = cursor
 
-    if client:
+    if isinstance(client, httpx.AsyncClient):
         resp = await client.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
@@ -151,13 +162,27 @@ async def public_fetch_graph(
             return resp.json()
 
 
-async def public_fetch_profiles(dids: list[str], client: httpx.AsyncClient | None = None) -> list[dict]:
+async def public_fetch_profiles(dids: list[str], client: httpx.AsyncClient | BskyClient | None = None) -> list[dict]:
     """
-    Fetch public profile details from AppView in batches of 25.
+    Fetch profile details in batches of 25.
+    If BskyClient is provided, uses authenticated get_profiles.
+    """
+    if not dids:
+        return []
 
-    FIX 5 (partial): Polite delay also reduced to 10ms here.
-    Full concurrency improvement requires the semaphore refactor in crawl.py.
-    """
+    if isinstance(client, BskyClient):
+        results = []
+        for i in range(0, len(dids), 25):
+            batch = dids[i:i + 25]
+            from analyzer.manager import global_req_tracker
+            global_req_tracker.record()
+            try:
+                resp = await client.get_profiles(batch)
+                results.extend([p.model_dump() if hasattr(p, 'model_dump') else p for p in resp.profiles])
+            except Exception as e:
+                logger.error(f"Authenticated profile hydration failed: {e}")
+        return results
+
     results = []
     async def _fetch_batch(c: httpx.AsyncClient):
         for i in range(0, len(dids), 25):
@@ -179,7 +204,7 @@ async def public_fetch_profiles(dids: list[str], client: httpx.AsyncClient | Non
                 delay = settings_cache.get("api_polite_delay_ms", 10) / 1000.0
                 await asyncio.sleep(delay)
                 
-    if client:
+    if isinstance(client, httpx.AsyncClient):
         await _fetch_batch(client)
     else:
         async with httpx.AsyncClient(timeout=30.0) as new_client:

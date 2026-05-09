@@ -10,6 +10,17 @@ running_tasks: Dict[str, asyncio.Task] = {}
 current_alias_var = contextvars.ContextVar("current_alias", default=None)
 current_op_var = contextvars.ContextVar("current_op", default=None)
 
+# Global state for activity tracking to support Auto-Turbo
+last_user_activity: float = time.time()
+
+def record_user_activity():
+    """
+    Updates the global activity timestamp. 
+    Called by API routes to signify the user is active.
+    """
+    global last_user_activity
+    last_user_activity = time.time()
+
 
 class RateTracker:
     """Tracks event counts over a sliding window to compute real-time rates."""
@@ -31,6 +42,26 @@ global_found_tracker = RateTracker()
 
 def task_key(alias: str, operation: str) -> str:
     return f"{alias}:{operation}"
+
+def is_turbo_active() -> bool:
+    """
+    Determines if the crawler should operate in Turbo mode based on
+    manual overrides or inactivity.
+    """
+    from settings_cache import settings_cache
+    
+    # Manual toggle always wins
+    if settings_cache.get("turbo_mode_manual", False):
+        return True
+        
+    # Auto-Turbo logic: enable if idle for X minutes
+    if settings_cache.get("auto_turbo_enabled", False):
+        threshold_seconds = settings_cache.get("turbo_inactivity_threshold_mins", 5) * 60
+        if (time.time() - last_user_activity) > threshold_seconds:
+            return True
+            
+    return False
+
 
 class ProgressBus:
     """

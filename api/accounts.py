@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import config
+from analyzer.manager import record_user_activity
 from db.models import SavedAccount
 from analyzer.worker import schedule_sync
 
@@ -36,6 +37,7 @@ class AccountResponse(BaseModel):
 
 @router.get("/", response_model=list[AccountResponse])
 async def list_accounts():
+    record_user_activity()
     accounts = await SavedAccount.all().order_by("alias")
     return [
         AccountResponse(
@@ -52,6 +54,7 @@ async def list_accounts():
 
 @router.patch("/{alias}/settings")
 async def update_settings(alias: str, auto_sync: bool = None, auto_crawl: bool = None):
+    record_user_activity()
     account = await SavedAccount.get_or_none(alias=alias)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found.")
@@ -66,6 +69,7 @@ async def update_settings(alias: str, auto_sync: bool = None, auto_crawl: bool =
 
 @router.post("/", response_model=AccountResponse, status_code=201)
 async def add_account(body: AddAccountRequest):
+    record_user_activity()
     # Persist to config (keychain + accounts.json)
     config.save_account(body.alias, body.handle, body.app_password)
 
@@ -89,6 +93,7 @@ async def add_account(body: AddAccountRequest):
 
 @router.delete("/{alias}", status_code=204)
 async def remove_account(alias: str):
+    record_user_activity()
     removed = config.remove_account(alias)
     await SavedAccount.filter(alias=alias).delete()
     if not removed:

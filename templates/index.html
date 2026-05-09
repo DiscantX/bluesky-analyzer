@@ -88,6 +88,14 @@
     <div class="stat-val" id="stat-crawl-budget">—</div>
     <div class="stat-label">DB Size</div>
   </div>
+
+  <div id="turbo-status-box" class="stat-box turbo-box" onclick="toggleTurboManual()" title="Toggle Turbo Mode (boosts crawl speed via authenticated budget borrowing)">
+    <span class="turbo-bolt">⚡</span>
+    <div style="display:flex; flex-direction:column">
+      <span id="turbo-status-label" class="turbo-status-text">Turbo Off</span>
+      <span class="stat-label">Power Mode</span>
+    </div>
+  </div>
 </div>
 
 <!-- ── Layout ─────────────────────────────────────────────────────────────── -->
@@ -252,6 +260,7 @@
         <button class="stab"        data-tab="api"       onclick="switchSettingsTab('api')">🌐 API</button>
         <button class="stab"        data-tab="crawl"     onclick="switchSettingsTab('crawl')">✨ Crawl</button>
         <button class="stab"        data-tab="profile"   onclick="switchSettingsTab('profile')">👤 Profile Loop</button>
+        <button class="stab"        data-tab="turbo"     onclick="switchSettingsTab('turbo')">⚡ Turbo</button>
         <button class="stab"        data-tab="graph"     onclick="switchSettingsTab('graph')">🕸 Graph</button>
       </aside>
  
@@ -569,7 +578,50 @@
           </div>
         </div>
       </div>
- 
+      
+      <!-- ── Turbo ── -->
+        <div class="stab-panel" data-panel="turbo">
+          <div class="setting-group">
+            <div class="setting-group-label">Turbo Mode & Logic</div>
+            <div class="setting-group-desc">Turbo Mode boosts crawl speeds by utilizing your authenticated API budget and increasing concurrency when you are idle.</div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Auto-Turbo Enabled</div>
+                <div class="setting-desc">Automatically switch to Turbo Mode when no user activity is detected.</div>
+              </div>
+              <div class="setting-control">
+                <label class="toggle-wrap">
+                  <input type="checkbox" id="set-auto_turbo_enabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Inactivity Timeout</div>
+                <div class="setting-desc">Minutes of silence before Auto-Turbo kicks in.</div>
+              </div>
+              <div class="setting-control">
+                <input class="setting-input" type="number" id="set-turbo_inactivity_threshold_mins" min="1" max="60">
+                <span class="setting-unit">mins</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-name">Turbo Concurrency</div>
+                <div class="setting-desc">Simultaneous expansion tasks during Turbo Mode.</div>
+              </div>
+              <div class="setting-control">
+                <input class="setting-input" type="number" id="set-turbo_concurrency" min="5" max="100">
+                <span class="setting-unit">reqs</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- ── Graph ── -->
         <div class="stab-panel" data-panel="graph">
         <div class="setting-group">

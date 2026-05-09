@@ -34,16 +34,6 @@ logger = logging.getLogger(__name__)
 # How stale a profile must be before it's re-queued for analysis
 ANALYSIS_STALENESS = timedelta(days=7)
 
-# How many profiles to pull per batch
-BATCH_SIZE = 100
-
-# Cooperative sleep between batches (seconds) — keeps the event loop free for
-# crawl/sync tasks without starving the analysis loop
-INTER_BATCH_SLEEP = 2.0
-
-# Sleep when there is genuinely nothing to do (seconds)
-IDLE_SLEEP = 60.0
-
 # Priority order for selecting which profiles to analyze next.
 # Higher crawl_tier and higher in_subgraph_degree = more interesting.
 PRIORITY_ORDER = ["-crawl_tier", "-in_subgraph_degree", "profile__last_analyzed_at"]
@@ -55,7 +45,6 @@ async def _select_batch(owner: SavedAccount) -> list[AccountRelationship]:
     """
     staleness_days = settings_cache.get("profile_analysis_staleness_days", 7)
     stale_cutoff = datetime.now(timezone.utc) - timedelta(days=staleness_days)
-    batch_size = settings_cache.get("profile_analysis_batch_size", 30)
 
     return await (
         AccountRelationship.filter(owner=owner)
@@ -68,14 +57,15 @@ async def _select_batch(owner: SavedAccount) -> list[AccountRelationship]:
             Q(profile__last_analyzed_at__isnull=True)
             | Q(profile__last_analyzed_at__lt=stale_cutoff)
         )
-        .order_by(*PRIORITY_ORDER)
-        .limit(batch_size)
+        .order_by(*PRIORITY_ORDER) # type: ignore
+        .limit(settings_cache.get("profile_analysis_batch_size", 30))
         .prefetch_related("profile")
     )
 
 
 async def _analyze_batch(
     owner: SavedAccount,
+    semaphore: asyncio.Semaphore,
     batch: list[AccountRelationship],
     client: BskyClient,
 ) -> int:
@@ -91,6 +81,7 @@ async def _analyze_batch(
         client,
         dids,
         limit_per_actor=settings_cache.get("feed_sample_size", 100),
+        semaphore=semaphore,
     ):
         rel = rel_by_did.get(did)
         if not rel:
@@ -156,10 +147,16 @@ async def run_profile_analysis_loop(owner: SavedAccount) -> None:
     while True:
         try:
             c = await _ensure_client()
-            idle_sleep = settings_cache.get("profile_analysis_idle_sleep_seconds", IDLE_SLEEP)
+            from analyzer.manager import is_turbo_active
+            turbo_active = is_turbo_active()
+
+            idle_sleep = settings_cache.get("profile_analysis_idle_sleep_seconds", 60.0)
+            inter_batch_sleep = settings_cache.get("profile_analysis_inter_batch_sleep_seconds", 2.0)
 
             if c is None:
                 await asyncio.sleep(idle_sleep)
+                # Ensure settings cache is refreshed for next iteration
+                await settings_cache.refresh()
                 continue
 
             batch = await _select_batch(owner)
@@ -174,10 +171,20 @@ async def run_profile_analysis_loop(owner: SavedAccount) -> None:
                 })
                 await asyncio.sleep(idle_sleep)
                 continue
+            
+            # Dynamically adjust batch size and concurrency for Turbo mode
+            effective_batch_size = settings_cache.get(
+                "turbo_profile_analysis_batch_size" if turbo_active else "profile_analysis_batch_size",
+                100 if turbo_active else 30
+            )
+            effective_feed_concurrency = settings_cache.get(
+                "turbo_feed_fetch_concurrency" if turbo_active else "feed_fetch_concurrency",
+                25 if turbo_active else 15
+            )
+            feed_fetch_semaphore = asyncio.Semaphore(effective_feed_concurrency)
 
             logger.info(f"[profile-analysis-loop] Analyzing batch of {len(batch)} for {alias}")
-
-            count = await _analyze_batch(owner, batch, c)
+            count = await _analyze_batch(owner, feed_fetch_semaphore, batch, c)
 
             await bus.emit(alias, {
                 "kind": "progress",
@@ -197,8 +204,8 @@ async def run_profile_analysis_loop(owner: SavedAccount) -> None:
             await asyncio.sleep(settings_cache.get("profile_analysis_idle_sleep_seconds", IDLE_SLEEP))
             continue
 
-        # Cooperative yield between batches
-        await asyncio.sleep(settings_cache.get("profile_analysis_inter_batch_sleep_seconds", INTER_BATCH_SLEEP))
+        # Cooperative yield between batches, using dynamic sleep
+        await asyncio.sleep(inter_batch_sleep)
 
 
 def start_profile_analysis_loop(account: SavedAccount) -> bool:
