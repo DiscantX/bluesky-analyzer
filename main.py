@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json as _json
 import logging
 import sqlite3
 import threading
@@ -33,29 +34,25 @@ from api.users import router as users_router
 from api.filters import router as filters_router
 from api.api_settings import router as settings_router
 from api.graph import router as graph_router
+from api.charts import router as charts_router
 import analyzer.worker as worker_module
 from analyzer.manager import running_tasks
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 class LogTruncator(logging.Filter):
-    """Truncates massive log messages to avoid terminal I/O bottlenecks."""
     def filter(self, record):
         if isinstance(record.msg, str) and len(record.msg) > 180:
             record.msg = record.msg[:177] + "..."
         return True
 
 class BusLogHandler(logging.Handler):
-    """Routes library logs to the web progress bus if an active task context exists."""
     def emit(self, record):
         from analyzer.manager import current_alias_var, current_op_var, bus
         alias = current_alias_var.get()
         op = current_op_var.get()
-        # We only route HTTP library logs to the web view to provide a "heartbeat"
         if alias and record.name.startswith(("httpx", "httpcore")):
             try:
                 loop = asyncio.get_running_loop()
-                # loop.create_task is not thread-safe. Use call_soon_threadsafe 
-                # because logging can occur from any background thread.
                 loop.call_soon_threadsafe(
                     lambda: asyncio.create_task(bus.emit(alias, {
                         "kind": "progress",
@@ -68,15 +65,12 @@ class BusLogHandler(logging.Handler):
                 pass
 
 class TerminalLibraryFilter(logging.Filter):
-    """Hides verbose library logs from the terminal while letting them flow to the bus."""
     def filter(self, record):
         if record.name.startswith(("httpx", "httpcore", "uvicorn.access")) and record.levelno < logging.WARNING:
             return False
         return True
 
 root_logger = logging.getLogger()
-# Clear any existing handlers to prevent duplicate logs,
-# especially if basicConfig was called implicitly or by another library.
 for handler in root_logger.handlers[:]:
     root_logger.removeHandler(handler)
 root_logger.setLevel(logging.INFO)
@@ -93,7 +87,6 @@ bus_handler = BusLogHandler()
 bus_handler.setFormatter(formatter)
 root_logger.addHandler(bus_handler)
 
-# Re-enable library loggers to ensure they generate records for the BusLogHandler
 logging.getLogger("httpx").setLevel(logging.INFO)
 logging.getLogger("httpcore").setLevel(logging.INFO)
 
@@ -146,7 +139,7 @@ def ensure_sqlite_compat_columns() -> None:
             if columns_p and name not in columns_p:
                 conn.execute(f"ALTER TABLE profiles ADD COLUMN {name} {sql_type}")
 
-        # Update global_settings with all required infrastructure columns
+        # Update global_settings
         NEW_GLOBAL_SETTINGS_COLUMNS = {
             "inactivity_threshold_days":        "INTEGER NOT NULL DEFAULT 90",
             "repost_ratio_threshold":           "REAL NOT NULL DEFAULT 0.70",
@@ -156,25 +149,20 @@ def ensure_sqlite_compat_columns() -> None:
             "disable_internal_rate_limits":     "INTEGER NOT NULL DEFAULT 0",
             "ignore_staleness_threshold_days":  "INTEGER NOT NULL DEFAULT 0",
             "feed_fetch_concurrency":           "INTEGER NOT NULL DEFAULT 15",
-            # Sync staleness tiers
             "staleness_tier2_days":             "INTEGER NOT NULL DEFAULT 3",
             "staleness_tier1_days":             "INTEGER NOT NULL DEFAULT 7",
             "staleness_tier0_days":             "INTEGER NOT NULL DEFAULT 30",
-            # API tuning
             "api_max_retries":                  "INTEGER NOT NULL DEFAULT 4",
             "api_base_backoff_seconds":         "REAL NOT NULL DEFAULT 2.0",
             "api_polite_delay_ms":              "INTEGER NOT NULL DEFAULT 10",
             "crawl_concurrency":                "INTEGER NOT NULL DEFAULT 3",
             "min_connection_threshold":         "INTEGER NOT NULL DEFAULT 3",
             "crawl_budget_mb":                  "INTEGER NOT NULL DEFAULT 1024",
-            # Crawl extras
             "crawl_hydration_concurrency":      "INTEGER NOT NULL DEFAULT 5",
-            # Profile analysis loop
             "profile_analysis_batch_size":                  "INTEGER NOT NULL DEFAULT 30",
             "profile_analysis_staleness_days":              "INTEGER NOT NULL DEFAULT 7",
             "profile_analysis_inter_batch_sleep_seconds":   "REAL NOT NULL DEFAULT 2.0",
             "profile_analysis_idle_sleep_seconds":          "REAL NOT NULL DEFAULT 60.0",
-            # Graph metrics
             "clustering_top_n":     "INTEGER NOT NULL DEFAULT 1000",
             "louvain_max_nodes":    "INTEGER NOT NULL DEFAULT 10000",
             "louvain_resolution":   "REAL NOT NULL DEFAULT 1.0",
@@ -190,8 +178,6 @@ def ensure_sqlite_compat_columns() -> None:
                 if name not in columns_gs:
                     conn.execute(f"ALTER TABLE global_settings ADD COLUMN {name} {sql_type}")
 
-        # Ensure the settings row exists and numeric fields have valid (non-zero) defaults
-        # to satisfy Pydantic validation (many fields have ge=1 or ge=30 constraints).
         exists = conn.execute("SELECT 1 FROM global_settings WHERE id = 1").fetchone()
         if not exists:
             conn.execute("INSERT INTO global_settings (id) VALUES (1)")
@@ -215,25 +201,35 @@ def ensure_sqlite_compat_columns() -> None:
         for update in cleanup_updates:
             conn.execute(f"UPDATE global_settings SET {update}")
 
+        # ── chart_definitions — safe incremental columns ───────────────────
+        try:
+            columns_cd = {row[1] for row in conn.execute("PRAGMA table_info(chart_definitions)").fetchall()}
+            if columns_cd:
+                for col, typ in {
+                    "description": "TEXT",
+                    "filter_tree": "TEXT",
+                    "aggregation": "TEXT",
+                    "options":     "TEXT",
+                    "pin_order":   "INTEGER",
+                }.items():
+                    if col not in columns_cd:
+                        conn.execute(f"ALTER TABLE chart_definitions ADD COLUMN {col} {typ}")
+        except Exception:
+            pass
+
         conn.commit()
     finally:
         conn.close()
 
 # ── CLI Arguments ─────────────────────────────────────────────────────────────
 def parse_cli_args():
-    """
-    Parse CLI arguments at the module level. We use parse_known_args 
-    to ensure that uvicorn workers can import this module without 
-    crashing on uvicorn's own internal CLI flags.
-    """
     parser = argparse.ArgumentParser(description="Bluesky Analyzer local server")
     parser.add_argument("--host",       default="127.0.0.1")
     parser.add_argument("--port",       type=int, default=8000)
-    parser.add_argument("--no-browser", action="store_true", help="Don't automatically open the browser")
-    parser.add_argument("--skip-sync-on-startup", action="store_true", help="Skip syncing accounts.json to DB on startup")
-    parser.add_argument("--ignore-staleness-threshold", type=int, default=0, help="Override staleness threshold for all accounts (in days)")
-    parser.add_argument("--reload",     action="store_true", help="Enable hot-reload (development mode)")
-    
+    parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--skip-sync-on-startup", action="store_true")
+    parser.add_argument("--ignore-staleness-threshold", type=int, default=0)
+    parser.add_argument("--reload",     action="store_true")
     args, _ = parser.parse_known_args()
     return args
 
@@ -262,16 +258,15 @@ async def lifespan(app: FastAPI):
         ensure_sqlite_compat_columns()
         conn = sqlite3.connect(DB_PATH)
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s instead of failing immediately
-        conn.execute("PRAGMA synchronous=NORMAL")  # Safe with WAL, much faster
-        conn.execute("PRAGMA cache_size=-64000")   # 64MB page cache
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-64000")
         conn.execute("PRAGMA temp_store=MEMORY")
         conn.commit()
         conn.close()
-        
+
         logger.info(f"Database ready at {DB_PATH}")
 
-        # Initialize default settings and apply CLI overrides
         from db.models import GlobalSettings, SavedAccount
         settings, _ = await GlobalSettings.get_or_create(id=1)
         from settings_cache import settings_cache
@@ -280,7 +275,6 @@ async def lifespan(app: FastAPI):
             settings.ignore_staleness_threshold_days = app.state.args.ignore_staleness_threshold
             await settings.save()
 
-        # Sync accounts.json -> DB on every startup
         if not app.state.args.skip_sync_on_startup:
             try:
                 import config as cfg
@@ -292,7 +286,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Could not sync accounts.json to DB: {e}")
 
-        # Start background automation worker
         await worker_module.start_background_worker()
 
         try:
@@ -331,8 +324,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Initialize args on app.state during module import so lifespan can access them
-# even when running in uvicorn worker processes or reload mode.
 app.state.args = parse_cli_args()
 
 # Static files
@@ -348,11 +339,11 @@ app.include_router(users_router)
 app.include_router(filters_router)
 app.include_router(settings_router)
 app.include_router(graph_router)
+app.include_router(charts_router)
 
 # ── Client logging ────────────────────────────────────────────────────────────
 @app.post("/api/client-log")
 async def client_log(request: Request):
-    """Endpoint for the frontend to report errors back to the terminal."""
     try:
         data = await request.json()
         level = data.get("level", "info")
@@ -384,6 +375,68 @@ async def hive_view(request: Request, alias: str):
 async def pack_view(request: Request, alias: str):
     return templates.TemplateResponse(request, "pack.html", {"alias": alias})
 
+# ── Chart Studio page routes ──────────────────────────────────────────────────
+@app.get("/charts/{alias}", response_class=HTMLResponse)
+async def charts_gallery(request: Request, alias: str):
+    return templates.TemplateResponse(request, "charts.html", {"alias": alias})
+
+@app.get("/charts/{alias}/new", response_class=HTMLResponse)
+async def chart_new(request: Request, alias: str):
+    return templates.TemplateResponse(request, "chart_studio.html", {
+        "alias":        alias,
+        "title":        "New Chart",
+        "chart_id":     None,
+        "chart_name":   "Untitled Chart",
+        "chart_icon":   "📊",
+        "initial_data": {},
+    })
+
+@app.get("/charts/{alias}/{chart_id}/edit", response_class=HTMLResponse)
+async def chart_edit(request: Request, alias: str, chart_id: int):
+    from db.models import ChartDefinition, SavedAccount
+    owner = await SavedAccount.get_or_none(alias=alias)
+    chart = await ChartDefinition.get_or_none(id=chart_id, owner=owner) if owner else None
+    if not chart:
+        return templates.TemplateResponse(request, "charts.html", {"alias": alias})
+
+    dims = _json.loads(chart.dimensions) if isinstance(chart.dimensions, str) else (chart.dimensions or {})
+    ft   = _json.loads(chart.filter_tree) if isinstance(chart.filter_tree, str) and chart.filter_tree else None
+
+    return templates.TemplateResponse(request, "chart_studio.html", {
+        "alias":        alias,
+        "title":        f"Edit — {chart.name}",
+        "chart_id":     chart_id,
+        "chart_name":   chart.name,
+        "chart_icon":   chart.icon or "📊",
+        "initial_data": {
+            "name":           chart.name,
+            "icon":           chart.icon,
+            "chart_type":     chart.chart_type,
+            "dimensions":     dims,
+            "filter_tree":    ft,
+            "filter_set_id":  getattr(chart, "filter_set_id", None),
+            "aggregation":    chart.aggregation,
+            "limit":          chart.limit,
+            "sort_by":        chart.sort_by,
+            "sort_dir":       chart.sort_dir,
+        },
+    })
+
+@app.get("/charts/{alias}/{chart_id}/view", response_class=HTMLResponse)
+async def chart_view_page(request: Request, alias: str, chart_id: int):
+    from db.models import ChartDefinition, SavedAccount
+    owner = await SavedAccount.get_or_none(alias=alias)
+    chart = await ChartDefinition.get_or_none(id=chart_id, owner=owner) if owner else None
+    if not chart:
+        return templates.TemplateResponse(request, "charts.html", {"alias": alias})
+    return templates.TemplateResponse(request, "chart_view.html", {
+        "alias":      alias,
+        "chart_id":   chart_id,
+        "chart_name": chart.name,
+        "chart_icon": chart.icon or "📊",
+        "pinned":     chart.pinned,
+    })
+
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
@@ -400,9 +453,7 @@ async def favicon():
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
 def main():
-    # Access the arguments already parsed during module import
     args = app.state.args
-
     url = f"http://{args.host}:{args.port}"
     logger.info(f"Starting Bluesky Analyzer at {url}")
 
@@ -416,7 +467,7 @@ def main():
         port=args.port,
         reload=args.reload,
         log_level="info",
-        log_config=None, # Prevent uvicorn from overriding our custom log routing
+        log_config=None,
         access_log=False,
     )
 

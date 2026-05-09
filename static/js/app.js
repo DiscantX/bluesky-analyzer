@@ -230,7 +230,7 @@ function renderStats() {
 function renderNav() {
   const s   = state.stats;
   const nav = el("nav-items");
-  
+
   let extraNav = "";
   if (state.activeTab === "custom-community") {
     extraNav = `<div class="nav-item active"><span>🔍</span><span>Filtered View</span></div>`;
@@ -247,6 +247,9 @@ function renderNav() {
       </div>`;
   }).join("") + extraNav + `
     <div class="sidebar-label" style="margin-top: 1rem;">Visualization</div>
+    <a class="nav-item" href="/charts/${encodeURIComponent(state.activeAlias || "")}" style="text-decoration:none;">
+      <span>📊</span><span>Chart Studio</span>
+    </a>
     <a class="nav-item" href="/graph/${encodeURIComponent(state.activeAlias || "")}" style="text-decoration:none;">
       <span>🕸️</span><span>Network Graph</span>
     </a>

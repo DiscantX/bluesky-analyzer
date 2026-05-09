@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chart Studio | {{ alias }}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/charts.css">
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <a href="/" class="topbar-logo" style="text-decoration:none">🦋 Bluesky Analyzer</a>
+  <span style="color:var(--muted2);font-size:0.75rem;margin:0 0.5rem">/</span>
+  <span style="font-weight:700;font-size:0.9rem">📊 Chart Studio</span>
+  <span style="font-family:var(--mono);font-size:0.72rem;color:var(--muted);margin-left:0.5rem">{{ alias }}</span>
+  <div class="topbar-sep"></div>
+  <a href="/charts/{{ alias }}/new" class="btn btn-primary">+ New Chart</a>
+  <a href="/" class="btn btn-ghost">← Dashboard</a>
+</header>
+
+<main style="padding:1.5rem;max-width:1400px;margin:0 auto;">
+
+  <!-- Empty state -->
+  <div id="empty-state" style="display:none;text-align:center;padding:4rem 2rem;color:var(--muted);font-family:var(--mono);font-size:0.85rem;">
+    <div style="font-size:3rem;margin-bottom:1rem">📊</div>
+    <div style="margin-bottom:1.5rem">No charts yet. Create your first one to get started.</div>
+    <a href="/charts/{{ alias }}/new" class="btn btn-primary">+ Create Chart</a>
+  </div>
+
+  <div id="chart-grid" class="chart-gallery-grid"></div>
+
+</main>
+
+<script>
+const ALIAS = {{ alias | tojson }};
+
+async function api(path, opts={}) {
+  const res = await fetch(path, { headers: {'Content-Type':'application/json'}, ...opts });
+  if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || res.statusText);
+  return res.status === 204 ? null : res.json();
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'2-digit' });
+}
+
+const TYPE_ICONS = {
+  scatter:'⚬', bubble:'⬤', histogram:'▬', bar:'▌', timeline:'◌',
+  hive:'🍯', circle_packing:'⭕', force_directed:'🕸',
+};
+
+function renderCard(chart) {
+  const icon = chart.icon || TYPE_ICONS[chart.chart_type] || '📊';
+  const updated = fmtDate(chart.updated_at || chart.created_at);
+
+  return `
+    <article class="chart-card" data-id="${chart.id}">
+      <div class="chart-card-preview" id="preview-${chart.id}">
+        <div class="chart-card-loading"><span>${icon}</span><div>Loading…</div></div>
+      </div>
+      <div class="chart-card-body">
+        <div class="chart-card-header">
+          <span class="chart-card-icon">${icon}</span>
+          <h3 class="chart-card-title">${chart.name}</h3>
+          ${chart.pinned ? '<span class="chart-card-pin" title="Pinned to sidebar">📌</span>' : ''}
+        </div>
+        <div class="chart-card-meta">
+          <span class="chart-type-badge">${chart.chart_type.replace('_',' ')}</span>
+          <span style="color:var(--muted2)">${updated}</span>
+        </div>
+        <div class="chart-card-actions">
+          <a href="/charts/${ALIAS}/${chart.id}/view" class="btn btn-primary btn-sm">View</a>
+          <a href="/charts/${ALIAS}/${chart.id}/edit" class="btn btn-ghost btn-sm">Edit</a>
+          <button class="btn btn-ghost btn-sm" onclick="togglePin(event,${chart.id},${chart.pinned})">${chart.pinned ? '📌 Unpin' : '📌 Pin'}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteChart(event,${chart.id},'${chart.name.replace(/'/g,"\\'")}')">Delete</button>
+        </div>
+      </div>
+    </article>`;
+}
+
+async function togglePin(e, id, currentlyPinned) {
+  e.stopPropagation();
+  await api(`/api/charts/${ALIAS}/${id}/pin?pinned=${!currentlyPinned}`, { method:'PATCH' });
+  loadCharts();
+}
+
+async function deleteChart(e, id, name) {
+  e.stopPropagation();
+  if (!confirm(`Delete "${name}"?`)) return;
+  await api(`/api/charts/${ALIAS}/${id}`, { method:'DELETE' });
+  document.querySelector(`[data-id="${id}"]`)?.remove();
+  if (document.querySelectorAll('.chart-card').length === 0) {
+    document.getElementById('empty-state').style.display = 'block';
+  }
+}
+
+async function loadCharts() {
+  const charts = await api(`/api/charts/${ALIAS}`);
+  const grid = document.getElementById('chart-grid');
+  const empty = document.getElementById('empty-state');
+
+  if (!charts || charts.length === 0) {
+    empty.style.display = 'block';
+    grid.innerHTML = '';
+    return;
+  }
+  empty.style.display = 'none';
+  grid.innerHTML = charts.map(renderCard).join('');
+
+  // Make cards clickable (but not action buttons)
+  document.querySelectorAll('.chart-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (!e.target.closest('button') && !e.target.closest('a')) {
+        window.location.href = `/charts/${ALIAS}/${card.dataset.id}/view`;
+      }
+    });
+  });
+
+  // Load thumbnails lazily
+  charts.forEach(chart => loadThumbnail(chart));
+}
+
+async function loadThumbnail(chart) {
+  const container = document.getElementById(`preview-${chart.id}`);
+  if (!container) return;
+  try {
+    const data = await api(`/api/charts/${ALIAS}/${chart.id}/data?thumbnail=true`);
+    container.innerHTML = '';
+    ChartBase.renderChart(container, data, {
+      interactive: false,
+      animated: false,
+      labels: false,
+      cssVars: ChartBase.getCSSVars(),
+      colorPalette: ChartBase.PALETTE,
+    });
+  } catch (e) {
+    container.innerHTML = `<div class="chart-card-loading" style="color:var(--muted2)"><span>${chart.icon || '📊'}</span><div style="font-size:0.65rem">${e.message || 'Preview unavailable'}</div></div>`;
+  }
+}
+
+// Load renderers then charts
+Promise.all([
+  new Promise(r => { const s=document.createElement('script'); s.src='/static/js/renderers/base.js'; s.onload=r; document.head.appendChild(s); }),
+]).then(() =>
+  Promise.all([
+    '/static/js/renderers/scatter.js',
+    '/static/js/renderers/histogram.js',
+    '/static/js/renderers/bar-bubble-timeline.js',
+    '/static/js/renderers/hive-pack-force.js',
+  ].map(src => new Promise(r => { const s=document.createElement('script'); s.src=src; s.onload=r; document.head.appendChild(s); })))
+).then(() => loadCharts());
+</script>
+</body>
+</html>

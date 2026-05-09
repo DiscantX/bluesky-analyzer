@@ -1,0 +1,390 @@
+/* static/css/charts.css */
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   GALLERY
+───────────────────────────────────────────────────────────────────────────── */
+
+.chart-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1.25rem;
+}
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+
+.chart-card-preview {
+  height: 200px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+
+.chart-card-preview svg {
+  width: 100%;
+  height: 100%;
+}
+
+.chart-card-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 0.5rem;
+  color: var(--muted2);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.chart-card-loading span {
+  font-size: 2rem;
+}
+
+.chart-card-body {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.chart-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chart-card-icon {
+  font-size: 1.1rem;
+}
+
+.chart-card-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin: 0;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chart-card-pin {
+  font-size: 0.75rem;
+}
+
+.chart-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+}
+
+.chart-type-badge {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  color: var(--accent2);
+  font-size: 0.65rem;
+  text-transform: capitalize;
+}
+
+.chart-card-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.25rem;
+}
+
+.btn-sm {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   STUDIO LAYOUT
+───────────────────────────────────────────────────────────────────────────── */
+
+.studio-body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.studio-topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 1rem;
+  height: 48px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.studio-name-input {
+  flex: 1;
+  max-width: 300px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.5rem;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  font-weight: 700;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.studio-name-input:focus,
+.studio-name-input:hover {
+  border-color: var(--border2);
+  background: var(--surface2);
+}
+
+.studio-dirty-hint {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--inactive);
+}
+
+.studio-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Builder sidebar ── */
+.studio-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.studio-section {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.studio-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.6rem;
+}
+
+.studio-icon-input {
+  width: 48px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.5rem;
+  color: var(--text);
+  font-size: 1.1rem;
+  text-align: center;
+  outline: none;
+}
+
+.studio-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+/* ── Type picker grid ── */
+.type-picker-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+
+.type-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.5rem 0.25rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.12s;
+  color: var(--muted);
+  font-family: var(--sans);
+}
+
+.type-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.type-btn.active {
+  border-color: var(--accent);
+  background: rgba(91,140,248,0.12);
+  color: var(--accent);
+}
+
+.type-btn-icon {
+  font-size: 1.1rem;
+}
+
+.type-btn-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* ── Dimension rows ── */
+.dim-row {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.dim-row:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.dim-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+}
+
+.dim-label {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.dim-row-controls {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.dim-label-input {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.5rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.dim-label-input:focus {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ── Preview panel ── */
+.studio-preview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.studio-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.studio-preview-canvas {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   FULL-SCREEN VIEW
+───────────────────────────────────────────────────────────────────────────── */
+
+.view-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 1rem;
+  background: rgba(19, 22, 31, 0.92);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  z-index: 50;
+  transition: opacity 0.3s, transform 0.3s;
+}
+
+.view-chart-name {
+  font-size: 0.88rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SHARED CHART COMPONENTS
+───────────────────────────────────────────────────────────────────────────── */
+
+/* SVG charts: fill container */
+.studio-preview-canvas svg,
+#chart-container svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#chart-container {
+  background: var(--bg);
+}
+
+/* State box reuse */
+.studio-preview-canvas .state-box,
+#chart-container .state-box {
+  height: 100%;
+}

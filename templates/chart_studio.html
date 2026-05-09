@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} | Chart Studio</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/charts.css">
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body class="studio-body">
+
+<!-- Top bar -->
+<header class="studio-topbar">
+  <a href="/charts/{{ alias }}" class="btn btn-ghost btn-sm">← Charts</a>
+  <input type="text" id="chart-name" class="studio-name-input" placeholder="Untitled Chart" value="{{ chart_name }}">
+  <div class="topbar-sep"></div>
+  <span class="studio-dirty-hint" id="dirty-hint"></span>
+  <button class="btn btn-ghost btn-sm" onclick="discardChanges()">Discard</button>
+  <button class="btn btn-primary btn-sm" id="save-btn" onclick="saveChart()">Save</button>
+</header>
+
+<div class="studio-layout">
+
+  <!-- ── Builder panel ──────────────────────────────────────────────────── -->
+  <aside class="studio-sidebar">
+    <div class="studio-section">
+      <label class="studio-label">Chart Type</label>
+      <div id="type-picker" class="type-picker-grid"></div>
+    </div>
+
+    <div class="studio-section">
+      <label class="studio-label">Icon</label>
+      <input type="text" id="chart-icon" class="studio-icon-input" maxlength="2" placeholder="📊">
+    </div>
+
+    <div class="studio-section">
+      <label class="studio-label">Data Filter</label>
+      <select id="filter-select" class="sort-select" style="width:100%">
+        <option value="">All accounts</option>
+      </select>
+      <div id="filter-tree-badge" style="display:none;margin-top:0.4rem;font-family:var(--mono);font-size:0.68rem;color:var(--accent2);padding:0.25rem 0.5rem;background:rgba(167,139,250,0.1);border-radius:4px;border:1px solid rgba(167,139,250,0.3)">
+        Custom filter active
+      </div>
+    </div>
+
+    <div class="studio-section" id="dimensions-section">
+      <label class="studio-label">Dimensions</label>
+      <div id="dimension-rows"></div>
+    </div>
+
+    <div class="studio-section">
+      <label class="studio-label">Options</label>
+      <div class="studio-option-row">
+        <span>Limit</span>
+        <input type="number" id="opt-limit" class="setting-input" style="width:80px" min="10" max="10000" value="2000">
+      </div>
+      <div class="studio-option-row" id="agg-row" style="display:none">
+        <span>Aggregation</span>
+        <select id="opt-agg" class="sort-select">
+          <option value="avg">Average</option>
+          <option value="sum">Sum</option>
+          <option value="count">Count</option>
+          <option value="max">Max</option>
+          <option value="min">Min</option>
+        </select>
+      </div>
+      <div class="studio-option-row">
+        <span>Sort</span>
+        <select id="opt-sort-dir" class="sort-select" style="width:100px">
+          <option value="desc">Descending</option>
+          <option value="asc">Ascending</option>
+        </select>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Preview panel ──────────────────────────────────────────────────── -->
+  <section class="studio-preview">
+    <div class="studio-preview-toolbar">
+      <span id="preview-meta" style="font-family:var(--mono);font-size:0.72rem;color:var(--muted)">–</span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshPreview()" title="Refresh preview">↺ Refresh</button>
+    </div>
+    <div id="preview-container" class="studio-preview-canvas">
+      <div class="state-box">Configure a chart type and dimensions to see a preview.</div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+const ALIAS      = {{ alias | tojson }};
+const CHART_ID   = {{ chart_id | tojson }};
+const INITIAL    = {{ initial_data | tojson }};
+
+let registry    = {};
+let filterSets  = [];
+let chartDef    = {
+  name:        INITIAL.name        || 'Untitled Chart',
+  icon:        INITIAL.icon        || '📊',
+  chart_type:  INITIAL.chart_type  || 'scatter',
+  dimensions:  INITIAL.dimensions  || {},
+  filter_tree: INITIAL.filter_tree || null,
+  filter_set_id: INITIAL.filter_set_id || null,
+  aggregation: INITIAL.aggregation || 'avg',
+  limit:       INITIAL.limit       || 2000,
+  sort_by:     INITIAL.sort_by     || null,
+  sort_dir:    INITIAL.sort_dir    || 'desc',
+  options:     INITIAL.options     || {},
+};
+let _previewTimer  = null;
+let _currentRenderer = null;
+let _dirty = false;
+
+// ── API ────────────────────────────────────────────────────────────────────
+async function api(path, opts={}) {
+  const res = await fetch(path, { headers:{'Content-Type':'application/json'}, ...opts });
+  if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || res.statusText);
+  return res.status === 204 ? null : res.json();
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  const [reg, filters] = await Promise.all([
+    api('/api/charts/registry'),
+    api(`/api/filters/${ALIAS}`),
+  ]);
+  registry   = reg;
+  filterSets = filters || [];
+
+  renderTypePicker();
+  renderFilterSelect();
+  renderDimensions();
+  syncFormToState();
+  schedulePreview();
+
+  // Wire up top-level inputs
+  document.getElementById('chart-name').addEventListener('input', e => { chartDef.name = e.target.value; markDirty(); });
+  document.getElementById('chart-icon').addEventListener('input', e => { chartDef.icon = e.target.value; markDirty(); });
+  document.getElementById('filter-select').addEventListener('change', e => {
+    const val = e.target.value;
+    if (val === '') { chartDef.filter_set_id = null; chartDef.filter_tree = null; }
+    else if (val === '__custom__') { /* handled separately */ }
+    else { chartDef.filter_set_id = parseInt(val); chartDef.filter_tree = null; }
+    markDirty(); schedulePreview();
+  });
+  document.getElementById('opt-limit').addEventListener('input', e => { chartDef.limit = parseInt(e.target.value) || 2000; markDirty(); schedulePreview(); });
+  document.getElementById('opt-agg').addEventListener('change', e => { chartDef.aggregation = e.target.value; markDirty(); schedulePreview(); });
+  document.getElementById('opt-sort-dir').addEventListener('change', e => { chartDef.sort_dir = e.target.value; markDirty(); schedulePreview(); });
+}
+
+function syncFormToState() {
+  document.getElementById('chart-name').value = chartDef.name;
+  document.getElementById('chart-icon').value = chartDef.icon;
+  document.getElementById('opt-limit').value  = chartDef.limit;
+  document.getElementById('opt-agg').value    = chartDef.aggregation || 'avg';
+  document.getElementById('opt-sort-dir').value = chartDef.sort_dir;
+
+  const filterSel = document.getElementById('filter-select');
+  if (chartDef.filter_set_id) filterSel.value = String(chartDef.filter_set_id);
+  else if (chartDef.filter_tree) {
+    document.getElementById('filter-tree-badge').style.display = 'block';
+  }
+}
+
+// ── Type picker ────────────────────────────────────────────────────────────
+function renderTypePicker() {
+  const container = document.getElementById('type-picker');
+  if (!registry || !registry.types) return;
+  container.innerHTML = Object.entries(registry.types).map(([key, def]) => `
+    <button class="type-btn ${chartDef.chart_type === key ? 'active' : ''}"
+            data-type="${key}" title="${def.description}" onclick="selectType('${key}')">
+      <span class="type-btn-icon">${def.icon}</span>
+      <span class="type-btn-label">${def.label}</span>
+    </button>
+  `).join('');
+}
+
+function selectType(key) {
+  if (chartDef.chart_type === key) return;
+  chartDef.chart_type = key;
+
+  // Preserve dimension values where keys match
+  const typeDef = registry.types[key];
+  const newDims = {};
+  if (typeDef) {
+    Object.keys(typeDef.dimensions).forEach(dimKey => {
+      newDims[dimKey] = chartDef.dimensions[dimKey] || {
+        source: 'field', field: '', label: '', scale: 'linear',
+      };
+    });
+  }
+  chartDef.dimensions = newDims;
+
+  // Show/hide aggregation
+  const isAgg = typeDef && typeDef.data_shape === 'aggregated';
+  document.getElementById('agg-row').style.display = isAgg ? 'flex' : 'none';
+
+  document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === key));
+  renderDimensions();
+  markDirty();
+  schedulePreview();
+}
+
+// ── Filter select ──────────────────────────────────────────────────────────
+function renderFilterSelect() {
+  const sel = document.getElementById('filter-select');
+  sel.innerHTML = `<option value="">All accounts</option>` +
+    filterSets.map(f => `<option value="${f.id}" ${chartDef.filter_set_id == f.id ? 'selected':''}>
+      ${f.icon || '🔍'} ${f.name}
+    </option>`).join('');
+}
+
+// ── Dimension rows ─────────────────────────────────────────────────────────
+const NUMERIC_FIELDS = [
+  ['followers_count','Followers'], ['follows_count','Following'], ['posts_count','Posts'],
+  ['days_since_post','Days Inactive'], ['repost_ratio','Repost Ratio'],
+  ['sampled_post_count','Sampled Posts'], ['repost_count','Reposts'],
+  ['original_post_count','Original Posts'], ['flowrank_score','FlowRank'],
+  ['clustering_coefficient','Clustering Coeff.'], ['in_subgraph_degree','In-Subgraph Degree'],
+  ['crawl_priority','Crawl Priority'],
+];
+const CATEGORICAL_FIELDS = [
+  ['community_id','Community'], ['crawl_tier','Crawl Tier'],
+  ['i_follow_them','I Follow'], ['they_follow_me','Follows Me'],
+  ['is_inactive','Inactive'], ['is_repost_heavy','Repost Heavy'],
+  ['is_one_sided_follow','One-Sided'], ['is_follower_only','Follower Only'],
+];
+const DATETIME_FIELDS = [
+  ['last_post_at','Last Post'], ['last_analyzed_at','Last Analyzed'],
+  ['last_hydrated_at','Last Hydrated'], ['first_seen_at','First Seen'],
+];
+
+function fieldOptionsHtml(accepts, selectedField) {
+  const groups = [];
+  if (!accepts || accepts.includes('numeric')) {
+    groups.push(`<optgroup label="Numeric">${NUMERIC_FIELDS.map(([v,l]) =>
+      `<option value="${v}" ${selectedField===v?'selected':''}>${l}</option>`).join('')}</optgroup>`);
+  }
+  if (!accepts || accepts.includes('categorical')) {
+    groups.push(`<optgroup label="Categorical">${CATEGORICAL_FIELDS.map(([v,l]) =>
+      `<option value="${v}" ${selectedField===v?'selected':''}>${l}</option>`).join('')}</optgroup>`);
+  }
+  if (!accepts || accepts.includes('datetime')) {
+    groups.push(`<optgroup label="Date">${DATETIME_FIELDS.map(([v,l]) =>
+      `<option value="${v}" ${selectedField===v?'selected':''}>${l}</option>`).join('')}</optgroup>`);
+  }
+  return groups.join('');
+}
+
+function renderDimensions() {
+  const container = document.getElementById('dimensions-section');
+  const typeDef   = registry.types && registry.types[chartDef.chart_type];
+  if (!typeDef) { container.style.display = 'none'; return; }
+  container.style.display = '';
+
+  const rows = document.getElementById('dimension-rows');
+  rows.innerHTML = '';
+
+  const dimDefs = typeDef.dimensions;
+  const axisKeys = Object.keys(dimDefs).filter(k => k.startsWith('axis_') && dimDefs[k].dynamic);
+  const staticKeys = Object.keys(dimDefs).filter(k => !axisKeys.includes(k));
+
+  // Static dimensions
+  staticKeys.forEach(dimKey => {
+    const dimDef = dimDefs[dimKey];
+    const cfg    = chartDef.dimensions[dimKey] || { source:'field', field:'', label:'', scale:'linear' };
+    rows.appendChild(makeDimRow(dimKey, dimDef, cfg));
+  });
+
+  // Dynamic axes (hive)
+  const dynKeys = Object.keys(chartDef.dimensions).filter(k => k.startsWith('axis_'));
+  const minAxes = typeDef.min_axes || 3;
+  const maxAxes = typeDef.max_axes || 8;
+  dynKeys.sort().forEach(k => {
+    const cfg = chartDef.dimensions[k];
+    rows.appendChild(makeDimRow(k, { required: true, accepts: ['numeric'], label: 'Axis', dynamic: true }, cfg, dynKeys.length > minAxes));
+  });
+
+  // Add axis button
+  if (axisKeys.length > 0 && dynKeys.length < maxAxes) {
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-ghost btn-sm';
+    addBtn.style.marginTop = '0.5rem';
+    addBtn.textContent = '+ Add Axis';
+    addBtn.onclick = () => {
+      const nextIdx = Math.max(...dynKeys.map(k => parseInt(k.split('_')[1]))) + 1;
+      chartDef.dimensions[`axis_${nextIdx}`] = { source:'field', field:'flowrank_score', label:`Axis ${nextIdx+1}`, scale:'log' };
+      renderDimensions(); markDirty(); schedulePreview();
+    };
+    rows.appendChild(addBtn);
+  }
+}
+
+function makeDimRow(dimKey, dimDef, cfg, canRemove = false) {
+  const row = document.createElement('div');
+  row.className = 'dim-row';
+  const accepts = dimDef.accepts;
+
+  row.innerHTML = `
+    <div class="dim-row-header">
+      <span class="dim-label">${dimDef.label || dimKey}${dimDef.required ? '' : ' <span style="color:var(--muted2)">(optional)</span>'}</span>
+      ${canRemove ? `<button class="btn btn-ghost btn-sm" style="padding:0 4px" onclick="removeDimAxis('${dimKey}')">×</button>` : ''}
+    </div>
+    <div class="dim-row-controls">
+      <select class="sort-select dim-field-sel" style="flex:1" data-dim="${dimKey}">
+        <option value="">Select field…</option>
+        ${fieldOptionsHtml(accepts, cfg.field)}
+      </select>
+      <select class="sort-select dim-scale-sel" style="width:82px" data-dim="${dimKey}">
+        ${['linear','log','sqrt','time'].map(s => `<option value="${s}" ${cfg.scale===s?'selected':''}>${s}</option>`).join('')}
+      </select>
+    </div>
+    <input class="field dim-label-input" type="text" placeholder="Axis label" value="${cfg.label || ''}" data-dim="${dimKey}" style="width:100%;margin-top:0.25rem">
+  `;
+
+  row.querySelector('.dim-field-sel').addEventListener('change', e => updateDim(dimKey, 'field', e.target.value));
+  row.querySelector('.dim-scale-sel').addEventListener('change', e => updateDim(dimKey, 'scale', e.target.value));
+  row.querySelector('.dim-label-input').addEventListener('input', e => updateDim(dimKey, 'label', e.target.value));
+
+  return row;
+}
+
+function updateDim(dimKey, prop, value) {
+  if (!chartDef.dimensions[dimKey]) chartDef.dimensions[dimKey] = { source:'field', field:'', scale:'linear', label:'' };
+  chartDef.dimensions[dimKey][prop] = value;
+  if (prop === 'field') {
+    // Auto-set label if empty
+    const allFields = [...NUMERIC_FIELDS, ...CATEGORICAL_FIELDS, ...DATETIME_FIELDS];
+    const found = allFields.find(([v]) => v === value);
+    if (found && !chartDef.dimensions[dimKey].label) {
+      chartDef.dimensions[dimKey].label = found[1];
+      const labelInput = document.querySelector(`.dim-label-input[data-dim="${dimKey}"]`);
+      if (labelInput) labelInput.value = found[1];
+    }
+    // Auto-set scale
+    const isDate = DATETIME_FIELDS.some(([v]) => v === value);
+    const isLog  = ['flowrank_score','followers_count','follows_count','posts_count','clustering_coefficient'].includes(value);
+    if (isDate) chartDef.dimensions[dimKey].scale = 'time';
+    else if (isLog) chartDef.dimensions[dimKey].scale = 'log';
+    const scaleEl = document.querySelector(`.dim-scale-sel[data-dim="${dimKey}"]`);
+    if (scaleEl) scaleEl.value = chartDef.dimensions[dimKey].scale;
+  }
+  markDirty(); schedulePreview();
+}
+
+function removeDimAxis(key) {
+  delete chartDef.dimensions[key];
+  renderDimensions(); markDirty(); schedulePreview();
+}
+
+// ── Preview ────────────────────────────────────────────────────────────────
+function schedulePreview() {
+  clearTimeout(_previewTimer);
+  _previewTimer = setTimeout(refreshPreview, 600);
+}
+
+async function refreshPreview() {
+  const container = document.getElementById('preview-container');
+  const meta      = document.getElementById('preview-meta');
+  meta.textContent = 'Loading…';
+
+  if (_currentRenderer && typeof _currentRenderer.destroy === 'function') {
+    _currentRenderer.destroy();
+    _currentRenderer = null;
+  }
+  container.innerHTML = '<div class="state-box">Loading preview…</div>';
+
+  // Build def to post
+  const def = {
+    ...chartDef,
+    dimensions: chartDef.dimensions,
+  };
+
+  try {
+    const result = await api(`/api/charts/${ALIAS}/preview`, {
+      method:'POST',
+      body: JSON.stringify(def),
+    });
+    container.innerHTML = '';
+    _currentRenderer = ChartBase.renderChart(container, result, {
+      interactive: true,
+      animated:    true,
+      cssVars:     ChartBase.getCSSVars(),
+      colorPalette: ChartBase.PALETTE,
+      onPointClick: (did) => { if (typeof InfoPanel !== 'undefined') InfoPanel.open('profile', did); },
+    });
+    const total = result.total || (result.data && result.data.length) || 0;
+    meta.textContent = `${total.toLocaleString()} data points${result.truncated ? ' (truncated)' : ''}`;
+  } catch(e) {
+    container.innerHTML = `<div class="state-box" style="color:var(--danger)">${e.message}</div>`;
+    meta.textContent = 'Error';
+  }
+}
+
+// ── Save ───────────────────────────────────────────────────────────────────
+async function saveChart() {
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true;
+  try {
+    const payload = {
+      ...chartDef,
+      name: document.getElementById('chart-name').value || 'Untitled Chart',
+      icon: document.getElementById('chart-icon').value || '📊',
+      dimensions: JSON.stringify(chartDef.dimensions),
+      filter_tree: chartDef.filter_tree ? JSON.stringify(chartDef.filter_tree) : null,
+    };
+    if (CHART_ID) {
+      await api(`/api/charts/${ALIAS}/${CHART_ID}`, { method:'PUT', body: JSON.stringify(payload) });
+    } else {
+      const created = await api(`/api/charts/${ALIAS}`, { method:'POST', body: JSON.stringify(payload) });
+      if (created && created.id) {
+        window.location.href = `/charts/${ALIAS}/${created.id}/edit`;
+        return;
+      }
+    }
+    clearDirty();
+  } catch(e) {
+    alert('Save failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function discardChanges() {
+  if (_dirty && !confirm('Discard unsaved changes?')) return;
+  window.location.href = `/charts/${ALIAS}`;
+}
+
+function markDirty() {
+  _dirty = true;
+  document.getElementById('dirty-hint').textContent = 'Unsaved changes';
+}
+
+function clearDirty() {
+  _dirty = false;
+  document.getElementById('dirty-hint').textContent = '';
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+const loadRenderers = () => new Promise(resolve => {
+  const scripts = [
+    '/static/js/renderers/base.js',
+    '/static/js/renderers/scatter.js',
+    '/static/js/renderers/histogram.js',
+    '/static/js/renderers/bar-bubble-timeline.js',
+    '/static/js/renderers/hive-pack-force.js',
+  ];
+  let loaded = 0;
+  scripts.forEach(src => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => { if (++loaded === scripts.length) resolve(); };
+    document.head.appendChild(s);
+  });
+});
+
+loadRenderers().then(init);
+</script>
+</body>
+</html>

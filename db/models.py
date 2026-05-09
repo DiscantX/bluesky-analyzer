@@ -12,14 +12,6 @@ from tortoise import fields
 from tortoise.models import Model
 
 
-"""
-db/models.py  — excerpt showing the updated GlobalSettings model.
-Replace the existing GlobalSettings class with this one.
-All other models remain unchanged.
-"""
-
-# ── paste this class in place of the existing GlobalSettings ──────────────────
-
 class GlobalSettings(Model):
     """App-wide configuration — one row (id=1) forever."""
 
@@ -64,7 +56,7 @@ class GlobalSettings(Model):
 
     class Meta:
         table = "global_settings"
-        
+
 class SavedAccount(Model):
     """A Bluesky account the user has configured in this app."""
 
@@ -90,8 +82,8 @@ class CommunityMetadata(Model):
     community_id = fields.IntField()
     name = fields.CharField(max_length=256, null=True)
     description = fields.TextField(null=True)
-    top_keywords = fields.JSONField(null=True) # Aggregated keywords
-    representative_members = fields.JSONField(null=True) # Top FlowRank handles
+    top_keywords = fields.JSONField(null=True)
+    representative_members = fields.JSONField(null=True)
     last_updated_at = fields.DatetimeField(auto_now=True)
 
     class Meta:
@@ -155,17 +147,17 @@ class Profile(Model):
     account_created_at = fields.DatetimeField(null=True)
     last_post_at = fields.DatetimeField(null=True)
     days_since_post = fields.IntField(null=True)
-    sampled_post_count = fields.IntField(default=0)   # how many posts we sampled
+    sampled_post_count = fields.IntField(default=0)
     repost_count = fields.IntField(default=0)
     original_post_count = fields.IntField(default=0)
-    repost_ratio = fields.FloatField(default=0.0)     # 0.0–1.0
+    repost_ratio = fields.FloatField(default=0.0)
     is_inactive = fields.BooleanField(default=False)
     is_repost_heavy = fields.BooleanField(default=False)
     last_hydrated_at = fields.DatetimeField(null=True)
     last_analyzed_at = fields.DatetimeField(null=True)
     first_seen_at = fields.DatetimeField(auto_now_add=True)
-    labels = fields.TextField(null=True) # Stored as JSON string
-    top_keywords = fields.JSONField(null=True) # Map of word -> frequency
+    labels = fields.TextField(null=True)
+    top_keywords = fields.JSONField(null=True)
 
     class Meta:
         table = "profiles"
@@ -186,27 +178,23 @@ class AccountRelationship(Model):
     they_follow_me = fields.BooleanField(default=False)
     interacted_with_owner = fields.BooleanField(default=False)
 
-    # Write-action tracking (for future features)
     muted = fields.BooleanField(default=False)
     blocked = fields.BooleanField(default=False)
 
-    is_one_sided_follow = fields.BooleanField(default=False)   # i follow, they don't
-    is_follower_only = fields.BooleanField(default=False)      # they follow, i don't
+    is_one_sided_follow = fields.BooleanField(default=False)
+    is_follower_only = fields.BooleanField(default=False)
 
-    # ── Crawl / Graph status ──────────────────────────────────────────────────
-    crawl_tier = fields.IntField(default=1)                    # 0=stub, 1=standard, 2=full
+    crawl_tier = fields.IntField(default=1)
     crawl_priority = fields.FloatField(default=0.0)
     last_crawled_at = fields.DatetimeField(null=True)
     crawl_pending_fields = fields.TextField(null=True)
-    discovered_via = fields.CharField(max_length=32, null=True) # owner_follows, owner_followers, graph_crawl
+    discovered_via = fields.CharField(max_length=32, null=True)
 
-    # ── Network analysis (computed via NetworkX) ──────────────────────────────
     flowrank_score = fields.FloatField(null=True)
     clustering_coefficient = fields.FloatField(null=True)
     in_subgraph_degree = fields.IntField(default=0)
     community_id = fields.IntField(null=True)
 
-    # Timestamps
     first_seen_at = fields.DatetimeField(auto_now_add=True)
 
     class Meta:
@@ -218,10 +206,7 @@ class AccountRelationship(Model):
 
 
 class FollowEdge(Model):
-    """
-    Foundation for the local social graph.
-    Stores a directed follow link between two DIDs discovered during crawl.
-    """
+    """Directed follow link between two DIDs discovered during crawl."""
     id = fields.IntField(pk=True)
     follower_did = fields.CharField(max_length=256)
     followee_did = fields.CharField(max_length=256)
@@ -233,10 +218,7 @@ class FollowEdge(Model):
 
 
 class CrawlQueueItem(Model):
-    """
-    Persisted graph crawl work item.
-    One row represents expanding a tracked account's follows list.
-    """
+    """Persisted graph crawl work item."""
 
     id = fields.IntField(pk=True)
     account = fields.ForeignKeyField("models.SavedAccount", related_name="crawl_queue_items")
@@ -250,7 +232,7 @@ class CrawlQueueItem(Model):
     handle = fields.CharField(max_length=128, null=True)
     priority = fields.FloatField(default=0.0)
     tier = fields.IntField(default=0)
-    status = fields.CharField(max_length=32, default="pending")  # pending | running | done | skipped | error
+    status = fields.CharField(max_length=32, default="pending")
     attempts = fields.IntField(default=0)
     cursor = fields.TextField(null=True)
     pages_fetched = fields.IntField(default=0)
@@ -272,9 +254,9 @@ class FilterSet(Model):
     id = fields.IntField(pk=True)
     owner = fields.ForeignKeyField("models.SavedAccount", related_name="filter_sets")
     name = fields.CharField(max_length=128)
-    icon = fields.CharField(max_length=16, null=True)      # Emoji
-    color = fields.CharField(max_length=16, null=True)     # Hex color
-    condition_tree = fields.TextField()                    # JSON representation of the logic
+    icon = fields.CharField(max_length=16, null=True)
+    color = fields.CharField(max_length=16, null=True)
+    condition_tree = fields.TextField()
     sort_by = fields.CharField(max_length=64, default="handle")
     sort_dir = fields.CharField(max_length=16, default="asc")
     created_at = fields.DatetimeField(auto_now_add=True)
@@ -290,9 +272,42 @@ class CustomVariable(Model):
     id = fields.IntField(pk=True)
     owner = fields.ForeignKeyField("models.SavedAccount", related_name="custom_variables")
     name = fields.CharField(max_length=64)
-    # JSON representation of the math tree (left_field, extra_terms)
     expression_tree = fields.TextField()
 
     class Meta:
         table = "custom_variables"
         unique_together = (("owner", "name"),)
+
+
+# ── Chart Studio ──────────────────────────────────────────────────────────────
+
+class ChartDefinition(Model):
+    """A saved interactive chart configuration."""
+
+    id          = fields.IntField(pk=True)
+    owner       = fields.ForeignKeyField("models.SavedAccount", related_name="chart_definitions")
+    name        = fields.CharField(max_length=128)
+    icon        = fields.CharField(max_length=8, null=True)
+    description = fields.TextField(null=True)
+    chart_type  = fields.CharField(max_length=64)           # Registry key e.g. "scatter"
+    dimensions  = fields.TextField()                        # JSON AxisConfig map
+    filter_set  = fields.ForeignKeyField(
+        "models.FilterSet", related_name="charts",
+        null=True, on_delete=fields.SET_NULL,
+    )
+    filter_tree = fields.TextField(null=True)               # Inline JSON filter tree
+    aggregation = fields.CharField(max_length=16, null=True) # avg|sum|count|max|min
+    limit       = fields.IntField(default=2000)
+    sort_by     = fields.CharField(max_length=64, null=True)
+    sort_dir    = fields.CharField(max_length=8, default="desc")
+    options     = fields.TextField(null=True)               # JSON chart-type-specific options
+    pinned      = fields.BooleanField(default=False)
+    pin_order   = fields.IntField(null=True)
+    created_at  = fields.DatetimeField(auto_now_add=True)
+    updated_at  = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "chart_definitions"
+
+    def __str__(self):
+        return f"{self.icon or '📊'} {self.name} ({self.chart_type})"
