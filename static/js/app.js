@@ -16,6 +16,7 @@ const state = {
   lastUserFetch: 0,
   settings: {},
   turboModeManual: false,
+  turboModeActive: false,
   crawlBudgetMb: 0,
   currentDbSizeMb: 0,
 
@@ -227,10 +228,10 @@ function renderStats() {
   // Turbo Mode UI update
   const turboBox = el("turbo-status-box");
   if (turboBox) {
-    const isActive = state.turboModeManual;
+    const isActive = state.turboModeActive || state.turboModeManual;
     turboBox.classList.toggle("active", isActive);
     const label = el("turbo-status-label");
-    if (label) label.textContent = isActive ? "Turbo On" : "Turbo Off";
+    if (label) label.textContent = isActive ? (state.turboModeManual ? "Turbo On" : "Auto Turbo") : "Turbo Off";
   }
 
   if (state.crawlBudgetMb > 0) {
@@ -527,6 +528,9 @@ async function reconcileOperationStatus() {
 
     if (status.turbo_mode_manual !== undefined) {
       state.turboModeManual = status.turbo_mode_manual;
+    }
+    if (status.turbo_mode_active !== undefined) {
+      state.turboModeActive = status.turbo_mode_active;
     }
 
     if (sync?.status === "running" && status.sync_running && !state.syncing) {

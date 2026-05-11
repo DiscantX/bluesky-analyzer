@@ -19,7 +19,6 @@ import httpx
 from typing import Optional, List
 from tortoise.expressions import Q
 from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem
-from db.profile_store import upsert_profile_relationship
 from analyzer.fetch import public_fetch_graph, public_fetch_profiles, BskyClient
 from analyzer.analyze import parse_dt
 from analyzer.metrics import run_graph_analysis
@@ -60,6 +59,11 @@ async def reset_interrupted_crawl_work(owner: SavedAccount) -> None:
 def _profile_value(profile: dict, snake_name: str, camel_name: str, default=0):
     value = profile.get(snake_name, profile.get(camel_name, default))
     return default if value is None else value
+
+
+def _profile_text(profile: dict, snake_name: str, camel_name: str, default: str = "") -> str:
+    value = profile.get(camel_name, profile.get(snake_name, default))
+    return value or default
 
 async def calculate_priority(user: AccountRelationship) -> float:
     """
@@ -148,6 +152,103 @@ async def _batch_update_degrees(
         f"Batch degree update: {len(batch_users)} users updated "
         f"across {len(page_dids)} DIDs in 2 queries."
     )
+
+
+async def _bulk_upsert_discovered_stubs(
+    owner: SavedAccount,
+    batch: list[dict],
+    rel_tier_by_did: dict[str, int],
+) -> int:
+    """
+    Persist graph-discovered profiles/relationships for one API page without
+    doing update_or_create work for every row. Returns relationships newly
+    discovered for this owner.
+    """
+    by_did: dict[str, dict] = {}
+    for item in batch:
+        did = item.get("did")
+        if did:
+            by_did[did] = item
+
+    dids = list(by_did.keys())
+    if not dids:
+        return 0
+
+    existing_rels = await AccountRelationship.filter(owner=owner, did__in=dids).all()
+    existing_rel_by_did = {rel.did: rel for rel in existing_rels}
+    new_rel_dids = [did for did in dids if did not in existing_rel_by_did]
+
+    profile_rows = []
+    for did, item in by_did.items():
+        handle = item.get("handle") or did
+        profile_rows.append(Profile(
+            did=did,
+            handle=handle,
+            display_name=_profile_text(item, "display_name", "displayName"),
+            avatar_url=item.get("avatar", "") or "",
+            profile_url=f"https://bsky.app/profile/{handle}",
+        ))
+
+    # Create missing profiles, then fetch the actual persisted rows so
+    # relationship bulk_create can point at concrete profile ids.
+    await Profile.bulk_create(profile_rows, ignore_conflicts=True)
+    profiles = await Profile.filter(did__in=dids).all()
+    profile_by_did = {profile.did: profile for profile in profiles}
+
+    profiles_to_update = []
+    for did, item in by_did.items():
+        profile = profile_by_did.get(did)
+        if not profile:
+            continue
+        handle = item.get("handle") or profile.handle
+        profile.handle = handle
+        profile.display_name = _profile_text(item, "display_name", "displayName", profile.display_name or "")
+        profile.avatar_url = item.get("avatar", profile.avatar_url) or ""
+        profile.profile_url = f"https://bsky.app/profile/{handle}"
+        profiles_to_update.append(profile)
+
+    if profiles_to_update:
+        await Profile.bulk_update(
+            profiles_to_update,
+            fields=["handle", "display_name", "avatar_url", "profile_url"],
+        )
+
+    pending_fields = json.dumps(["feed_sample", "relationship_flags"])
+    rels_to_create = []
+    for did in new_rel_dids:
+        profile = profile_by_did.get(did)
+        if not profile:
+            continue
+        rels_to_create.append(AccountRelationship(
+            owner=owner,
+            profile=profile,
+            did=did,
+            discovered_via="graph_crawl",
+            crawl_tier=0,
+            crawl_pending_fields=pending_fields,
+        ))
+
+    if rels_to_create:
+        await AccountRelationship.bulk_create(rels_to_create, ignore_conflicts=True)
+
+    rels_to_update = []
+    for did, rel in existing_rel_by_did.items():
+        # Preserve promotion state; only refresh lightweight crawl metadata on stubs.
+        if rel_tier_by_did.get(did, rel.crawl_tier) == 0:
+            rel.discovered_via = rel.discovered_via or "graph_crawl"
+            rel.crawl_pending_fields = rel.crawl_pending_fields or pending_fields
+            rels_to_update.append(rel)
+
+    if rels_to_update:
+        await AccountRelationship.bulk_update(
+            rels_to_update,
+            fields=["discovered_via", "crawl_pending_fields"],
+        )
+
+    for did in new_rel_dids:
+        rel_tier_by_did[did] = 0
+
+    return len(new_rel_dids)
 
 
 async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None):
@@ -253,7 +354,12 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     crawl_semaphore = asyncio.Semaphore(crawl_limit)
     hydration_semaphore = asyncio.Semaphore(hydrate_limit)
 
-    candidates = await claim_crawl_items(owner, batch_size)
+    effective_batch_size = max(batch_size, crawl_limit)
+    if effective_batch_size != batch_size:
+        crawl_run.batch_size = effective_batch_size
+        await crawl_run.save(update_fields=["batch_size"])
+
+    candidates = await claim_crawl_items(owner, effective_batch_size)
 
     if not candidates:
         logger.info(f"No candidates found for crawl for account {owner.alias}")
@@ -317,6 +423,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
 
             # Collected page_dids across both directions for batched degree update
             all_discovered_dids: list[str] = []
+            hydration_tasks: list[asyncio.Task] = []
 
             async def fetch_direction_pages(direction: str, start_cursor: str | None = None, c: httpx.AsyncClient | BskyClient | None = None):
                 """Paginate one direction fully and process each page."""
@@ -332,10 +439,10 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     
                     # Determine edges based on direction
                     if direction == "follows":
-                        edge_data = [(user.did, f["did"], f.get("createdAt")) for f in batch]
+                        edge_data = [(user.did, f["did"], f.get("createdAt", f.get("created_at"))) for f in batch]
                         target_filter = {"followee_did__in": page_dids, "follower_did": user.did}
                     else:
-                        edge_data = [(f["did"], user.did, f.get("createdAt")) for f in batch]
+                        edge_data = [(f["did"], user.did, f.get("createdAt", f.get("created_at"))) for f in batch]
                         target_filter = {"follower_did__in": page_dids, "followee_did": user.did}
 
                     all_edges = await FollowEdge.filter(**target_filter).all()
@@ -350,36 +457,16 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     if new_edges:
                         await FollowEdge.bulk_create(new_edges, ignore_conflicts=True)
 
-                    for f in batch:
-                        target_did = f["did"]
-                        target_handle = f["handle"]
-
-                        if target_did not in rel_tier_by_did or rel_tier_by_did[target_did] == 0:
-                            _, target_user = await upsert_profile_relationship(
-                                owner,
-                                {
-                                    "did": target_did,
-                                    "handle": target_handle,
-                                    "display_name": f.get("displayName", ""),
-                                    "avatar_url": f.get("avatar", ""),
-                                    "profile_url": f"https://bsky.app/profile/{target_handle}",
-                                    "discovered_via": "graph_crawl",
-                                    "crawl_tier": 0,
-                                    "crawl_pending_fields": json.dumps(["feed_sample", "relationship_flags"]),
-                                },
-                            )
-                        else:
-                            target_user = await AccountRelationship.filter(owner=owner, did=target_did).first()
-
-                        if target_user and target_user.first_seen_at and target_user.first_seen_at >= datetime.now(timezone.utc) - timedelta(seconds=5):
-                            from analyzer.manager import global_found_tracker
-                            global_found_tracker.record()
-                            session_found += 1
-
-                        await enqueue_crawl_user(owner, target_user)
+                    new_relationships = await _bulk_upsert_discovered_stubs(owner, batch, rel_tier_by_did)
+                    if new_relationships:
+                        from analyzer.manager import global_found_tracker
+                        global_found_tracker.record(new_relationships)
+                        session_found += new_relationships
 
                     all_discovered_dids.extend(page_dids)
-                    await hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit, client=c)
+                    hydration_tasks.append(asyncio.create_task(
+                        hydrate_stubs(owner, page_dids, hydration_semaphore, on_progress=emit, client=c)
+                    ))
 
                     next_cursor = data.get("cursor")
                     if direction == "follows":
@@ -408,6 +495,12 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     fetch_direction_pages("follows", start_cursor, client_to_use),
                     fetch_direction_pages("followers", None, client_to_use),
                 )
+
+                if hydration_tasks:
+                    hydration_results = await asyncio.gather(*hydration_tasks, return_exceptions=True)
+                    for result in hydration_results:
+                        if isinstance(result, Exception):
+                            logger.warning(f"Hydration task failed during crawl: {result}")
 
                 # FIX 4: Now that all pages across both directions are done,
                 # run a single batched degree update for every discovered DID.
@@ -680,7 +773,7 @@ async def hydrate_stubs(
                 shared_profile = await user.profile
                 handle = profile.get("handle") or shared_profile.handle
                 shared_profile.handle = handle
-                shared_profile.display_name = profile.get("displayName", shared_profile.display_name) or ""
+                shared_profile.display_name = _profile_text(profile, "display_name", "displayName", shared_profile.display_name or "")
                 shared_profile.avatar_url = profile.get("avatar", shared_profile.avatar_url) or ""
                 shared_profile.profile_url = f"https://bsky.app/profile/{handle}"
                 shared_profile.followers_count = _profile_value(profile, "followers_count", "followersCount")
@@ -688,7 +781,7 @@ async def hydrate_stubs(
                 shared_profile.posts_count = _profile_value(profile, "posts_count", "postsCount")
                 shared_profile.description = profile.get("description")
                 shared_profile.banner_url = profile.get("banner")
-                shared_profile.account_created_at = parse_dt(profile.get("createdAt"))
+                shared_profile.account_created_at = parse_dt(profile.get("createdAt", profile.get("created_at")))
                 shared_profile.labels = json.dumps([l.get("val") for l in profile.get("labels", [])]) if profile.get("labels") else None
                 shared_profile.last_hydrated_at = hydrated_at
                 profiles_to_update.append(shared_profile)

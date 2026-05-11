@@ -178,11 +178,12 @@ async def sync_stream(alias: str, operation: str | None = None):
 @router.get("/{alias}/status")
 async def sync_status(alias: str):
     """Return latest sync and crawl status for this account (polling fallback)."""
-    from analyzer.manager import global_req_tracker, global_found_tracker
+    from analyzer.manager import global_req_tracker, global_found_tracker, is_turbo_active
     run = await SyncRun.filter(account__alias=alias).order_by("-started_at").first()
     crawl_run = await CrawlRun.filter(account__alias=alias).order_by("-started_at").first()
 
-    turbo_mode = settings_cache.get("turbo_mode_manual", False)
+    turbo_mode_manual = settings_cache.get("turbo_mode_manual", False)
+    turbo_mode_active = is_turbo_active()
     sync_payload = {"status": "never_synced"}
     if run:
         live_sync = bus.last_event.get((alias, "sync"), {})
@@ -212,8 +213,9 @@ async def sync_status(alias: str):
         # than the disk.
         live_event = bus.last_event.get((alias, "crawl"), {})
         
-        discovered_count = live_event.get("discovered_count", crawl_run.discovered_count)
-        request_count = live_event.get("request_count", crawl_run.request_count)
+        live_crawl_stats = live_event.get("crawl_stats") or {}
+        discovered_count = live_crawl_stats.get("discovered_count", live_event.get("discovered_count", crawl_run.discovered_count))
+        request_count = live_crawl_stats.get("request_count", live_event.get("request_count", crawl_run.request_count))
         last_message = live_event.get("message", crawl_run.last_message)
 
         crawl_payload = {
@@ -228,6 +230,7 @@ async def sync_status(alias: str):
             "candidates_failed": crawl_run.candidates_failed,
             "candidates_skipped": crawl_run.candidates_skipped,
             "discovered_count": discovered_count,
+            "request_count": request_count,
             "last_message": last_message,
             "pending_queue_items": pending,
             "running_queue_items": running,
@@ -237,7 +240,8 @@ async def sync_status(alias: str):
     response = {
         "req_rate": global_req_tracker.get_rate(),
         "found_rate": global_found_tracker.get_rate(),
-        "turbo_mode_manual": turbo_mode,
+        "turbo_mode_manual": turbo_mode_manual,
+        "turbo_mode_active": turbo_mode_active,
         **sync_payload,
         "is_running": is_running(alias),
         "sync_running": is_operation_running(alias, "sync"),

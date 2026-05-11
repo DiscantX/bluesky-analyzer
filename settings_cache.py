@@ -44,16 +44,16 @@ DEFAULTS: dict[str, Any] = {
     "api_polite_delay_ms": 10,
 
     # ── Crawl ─────────────────────────────────────────────────────────────────
-    "crawl_concurrency": 3,
+    "crawl_concurrency": 6,
     "min_connection_threshold": 3,
     "crawl_budget_mb": 1024,
-    "crawl_hydration_concurrency": 5,
+    "crawl_hydration_concurrency": 12,
 
     # ── Turbo Mode ────────────────────────────────────────────────────────────
     "turbo_mode_manual": False,
     "auto_turbo_enabled": True,
     "turbo_inactivity_threshold_mins": 5,
-    "turbo_concurrency": 25,
+    "turbo_concurrency": 50,
 
     # ── Profile analysis loop ─────────────────────────────────────────────────
     "profile_analysis_batch_size": 30,

@@ -37,16 +37,16 @@ class SettingsSchema(BaseModel):
     api_polite_delay_ms:            int   = Field(10,  ge=0,  le=5000)
 
     # ── Crawl ─────────────────────────────────────────────────────────────────
-    crawl_concurrency:              int = Field(3,    ge=1,  le=100)
+    crawl_concurrency:              int = Field(6,    ge=1,  le=100)
     min_connection_threshold:       int = Field(3,    ge=1,  le=50)
     crawl_budget_mb:                int = Field(1024, ge=100, le=102400)
-    crawl_hydration_concurrency:    int = Field(5,    ge=1,  le=100)
+    crawl_hydration_concurrency:    int = Field(12,   ge=1,  le=100)
 
     # ── Turbo Mode ────────────────────────────────────────────────────────────
     turbo_mode_manual:               bool  = False
     auto_turbo_enabled:              bool  = True
     turbo_inactivity_threshold_mins: int   = Field(5,  ge=1,  le=60)
-    turbo_concurrency:               int   = Field(25, ge=1,  le=100)
+    turbo_concurrency:               int   = Field(50, ge=1,  le=100)
 
     # ── Profile analysis loop ─────────────────────────────────────────────────
     profile_analysis_batch_size:                int   = Field(30,   ge=1,   le=500)
@@ -88,14 +88,14 @@ async def patch_global_settings():
             ("api_max_retries",                  "INT DEFAULT 4"),
             ("api_base_backoff_seconds",         "REAL DEFAULT 2.0"),
             ("api_polite_delay_ms",              "INT DEFAULT 10"),
-            ("crawl_concurrency",                "INT DEFAULT 3"),
+            ("crawl_concurrency",                "INT DEFAULT 6"),
             ("min_connection_threshold",         "INT DEFAULT 3"),
             ("crawl_budget_mb",                  "INT DEFAULT 1024"),
             ("turbo_mode_manual",               "INT DEFAULT 0"),
             ("auto_turbo_enabled",              "INT DEFAULT 1"),
             ("turbo_inactivity_threshold_mins", "INT DEFAULT 5"),
-            ("turbo_concurrency",               "INT DEFAULT 25"),
-            ("crawl_hydration_concurrency",     "INT DEFAULT 5"),
+            ("turbo_concurrency",               "INT DEFAULT 50"),
+            ("crawl_hydration_concurrency",     "INT DEFAULT 12"),
             ("profile_analysis_batch_size",      "INT DEFAULT 30"),
             ("profile_analysis_staleness_days",  "INT DEFAULT 7"),
             ("turbo_profile_analysis_batch_size", "INT DEFAULT 100"),

@@ -39,7 +39,7 @@ class GlobalSettings(Model):
     api_polite_delay_ms             = fields.IntField(default=10)
 
     # ── Crawl ─────────────────────────────────────────────────────────────────
-    crawl_concurrency               = fields.IntField(default=3)
+    crawl_concurrency               = fields.IntField(default=6)
     min_connection_threshold        = fields.IntField(default=3)
     crawl_budget_mb                 = fields.IntField(default=1024)
 
@@ -47,8 +47,8 @@ class GlobalSettings(Model):
     turbo_mode_manual               = fields.BooleanField(default=False)
     auto_turbo_enabled              = fields.BooleanField(default=True)
     turbo_inactivity_threshold_mins = fields.IntField(default=5)
-    turbo_concurrency               = fields.IntField(default=25)
-    crawl_hydration_concurrency     = fields.IntField(default=5)
+    turbo_concurrency               = fields.IntField(default=50)
+    crawl_hydration_concurrency     = fields.IntField(default=12)
 
     # ── Profile analysis loop ─────────────────────────────────────────────────
     profile_analysis_batch_size             = fields.IntField(default=30)
