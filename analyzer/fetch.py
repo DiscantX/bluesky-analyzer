@@ -146,6 +146,10 @@ async def public_fetch_graph(
         resp = await method(actor=actor_did, limit=limit, cursor=cursor)
         return {"cursor": getattr(resp, "cursor", None), collection: [f.model_dump() if hasattr(f, 'model_dump') else f for f in getattr(resp, collection, [])]}
 
+    # Track public AppView requests
+    from analyzer.manager import global_req_tracker
+    global_req_tracker.record()
+
     url = f"https://public.api.bsky.app/xrpc/app.bsky.graph.get{collection.capitalize()}"
     params = {"actor": actor_did, "limit": limit}
     if cursor:
@@ -174,8 +178,8 @@ async def public_fetch_profiles(dids: list[str], client: httpx.AsyncClient | Bsk
         results = []
         for i in range(0, len(dids), 25):
             batch = dids[i:i + 25]
-            from analyzer.manager import global_req_tracker
-            global_req_tracker.record()
+            # BskyClient already records internally via its _run() method; 
+            # removing local record() to avoid double-counting in Turbo mode.
             try:
                 resp = await client.get_profiles(batch)
                 results.extend([p.model_dump() if hasattr(p, 'model_dump') else p for p in resp.profiles])

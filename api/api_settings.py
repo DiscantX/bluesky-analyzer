@@ -37,10 +37,10 @@ class SettingsSchema(BaseModel):
     api_polite_delay_ms:            int   = Field(10,  ge=0,  le=5000)
 
     # ── Crawl ─────────────────────────────────────────────────────────────────
-    crawl_concurrency:              int = Field(3,    ge=1,  le=20)
+    crawl_concurrency:              int = Field(3,    ge=1,  le=100)
     min_connection_threshold:       int = Field(3,    ge=1,  le=50)
     crawl_budget_mb:                int = Field(1024, ge=100, le=102400)
-    crawl_hydration_concurrency:    int = Field(5,    ge=1,  le=20)
+    crawl_hydration_concurrency:    int = Field(5,    ge=1,  le=100)
 
     # ── Turbo Mode ────────────────────────────────────────────────────────────
     turbo_mode_manual:               bool  = False
@@ -74,6 +74,23 @@ async def patch_global_settings():
     try:
         conn = connections.get("default")
         new_cols = [
+            ("inactivity_threshold_days",        "INT DEFAULT 90"),
+            ("repost_ratio_threshold",           "REAL DEFAULT 0.7"),
+            ("feed_sample_size",                 "INT DEFAULT 100"),
+            ("sync_staleness_hours",             "INT DEFAULT 12"),
+            ("worker_sweep_interval_seconds",    "INT DEFAULT 300"),
+            ("staleness_tier2_days",             "INT DEFAULT 3"),
+            ("staleness_tier1_days",             "INT DEFAULT 7"),
+            ("staleness_tier0_days",             "INT DEFAULT 30"),
+            ("ignore_staleness_threshold_days",  "INT DEFAULT 0"),
+            ("feed_fetch_concurrency",           "INT DEFAULT 15"),
+            ("disable_internal_rate_limits",     "INT DEFAULT 0"),
+            ("api_max_retries",                  "INT DEFAULT 4"),
+            ("api_base_backoff_seconds",         "REAL DEFAULT 2.0"),
+            ("api_polite_delay_ms",              "INT DEFAULT 10"),
+            ("crawl_concurrency",                "INT DEFAULT 3"),
+            ("min_connection_threshold",         "INT DEFAULT 3"),
+            ("crawl_budget_mb",                  "INT DEFAULT 1024"),
             ("turbo_mode_manual",               "INT DEFAULT 0"),
             ("auto_turbo_enabled",              "INT DEFAULT 1"),
             ("turbo_inactivity_threshold_mins", "INT DEFAULT 5"),

@@ -276,7 +276,8 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
         try:
             password = config.get_password(owner.alias)
             if password:
-                auth_client = BskyClient(alias=owner.alias)
+                # Boost the client semaphore to match the turbo concurrency setting
+                auth_client = BskyClient(alias=owner.alias, concurrency=crawl_limit)
                 await auth_client.login(owner.handle, password)
             logger.info(f"Turbo Mode Active for {owner.alias}: Using authenticated API budget.")
         except Exception as e:

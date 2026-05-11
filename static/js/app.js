@@ -111,8 +111,25 @@ async function api(path, opts = {}) {
     ...opts,
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    const error = new Error(err.detail || res.statusText);
+    let msg = res.statusText;
+    try {
+      const err = await res.json();
+      if (err.detail) {
+        if (typeof err.detail === 'string') {
+          msg = err.detail;
+        } else if (Array.isArray(err.detail)) {
+          // FastAPI validation errors: [{loc:[], msg: "", type:""}]
+          msg = err.detail.map(d => {
+            const field = d.loc && d.loc.length > 0 ? d.loc[d.loc.length - 1] : "error";
+            return `${field}: ${d.msg}`;
+          }).join(", ");
+        } else {
+          msg = JSON.stringify(err.detail);
+        }
+      }
+    } catch (e) {}
+
+    const error = new Error(msg);
     error.status = res.status;
     throw error;
   }
@@ -854,6 +871,7 @@ const SETTINGS_KEYS = [
   "api_base_backoff_seconds","api_polite_delay_ms",
   "crawl_concurrency","crawl_hydration_concurrency","min_connection_threshold","crawl_budget_mb",
   "turbo_mode_manual", "auto_turbo_enabled", "turbo_inactivity_threshold_mins", "turbo_concurrency",
+  "turbo_profile_analysis_batch_size", "turbo_feed_fetch_concurrency",
   "profile_analysis_batch_size","profile_analysis_staleness_days",
   "profile_analysis_inter_batch_sleep_seconds","profile_analysis_idle_sleep_seconds",
   "clustering_top_n","louvain_max_nodes","louvain_resolution",
@@ -909,6 +927,10 @@ async function submitSettings() {
   for (const key of SETTINGS_KEYS) {
     const input = document.getElementById(`set-${key}`);
     if (!input) continue;
+
+    // Skip empty numeric inputs to prevent sending 0 to fields with min-value constraints
+    if (input.type === "number" && input.value === "") continue;
+
     payload[key] = input.type === "checkbox" ? input.checked
       : input.type === "number" ? Number(input.value)
       : input.value;
