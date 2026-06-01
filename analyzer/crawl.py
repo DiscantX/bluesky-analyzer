@@ -180,7 +180,10 @@ async def _bulk_upsert_discovered_stubs(
 
     profile_rows = []
     for did, item in by_did.items():
-        handle = item.get("handle") or did
+        # Defensive truncation to 256 to match updated model and prevent crashes
+        # if the API returns an unexpectedly long string.
+        raw_handle = item.get("handle") or did
+        handle = raw_handle[:256]
         profile_rows.append(Profile(
             did=did,
             handle=handle,
@@ -200,11 +203,12 @@ async def _bulk_upsert_discovered_stubs(
         profile = profile_by_did.get(did)
         if not profile:
             continue
-        handle = item.get("handle") or profile.handle
+        raw_handle = item.get("handle") or profile.handle
+        handle = raw_handle[:256]
         profile.handle = handle
-        profile.display_name = _profile_text(item, "display_name", "displayName", profile.display_name or "")
+        profile.display_name = _profile_text(item, "display_name", "displayName", profile.display_name or "")[:256]
         profile.avatar_url = item.get("avatar", profile.avatar_url) or ""
-        profile.profile_url = f"https://bsky.app/profile/{handle}"
+        profile.profile_url = f"https://bsky.app/profile/{handle}"[:512] # URL might be longer than handle
         profiles_to_update.append(profile)
 
     if profiles_to_update:

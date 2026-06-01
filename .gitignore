@@ -1,6 +1,7 @@
 # Credentials & sessions
 accounts.json
 .sessions/
+*.code-workspace
 
 # Database
 *.db

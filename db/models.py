@@ -75,7 +75,7 @@ class SavedAccount(Model):
 
     id = fields.IntField(pk=True)
     alias = fields.CharField(max_length=64, unique=True)   # e.g. "main", "alt"
-    handle = fields.CharField(max_length=128, unique=True)
+    handle = fields.CharField(max_length=256, unique=True)
     did = fields.CharField(max_length=256, null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
     last_synced_at = fields.DatetimeField(null=True)
@@ -148,7 +148,7 @@ class Profile(Model):
 
     id = fields.IntField(pk=True)
     did = fields.CharField(max_length=256, unique=True)
-    handle = fields.CharField(max_length=128)
+    handle = fields.CharField(max_length=256)
     display_name = fields.CharField(max_length=256, null=True)
     description = fields.TextField(null=True)
     avatar_url = fields.TextField(null=True)
@@ -242,7 +242,7 @@ class CrawlQueueItem(Model):
         on_delete=fields.SET_NULL,
     )
     did = fields.CharField(max_length=256)
-    handle = fields.CharField(max_length=128, null=True)
+    handle = fields.CharField(max_length=256, null=True)
     priority = fields.FloatField(default=0.0)
     tier = fields.IntField(default=0)
     status = fields.CharField(max_length=32, default="pending")
