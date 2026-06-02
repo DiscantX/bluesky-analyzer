@@ -151,7 +151,7 @@
         // data here is the hierarchy object from the packing query
         const rootData = data && data.children ? data : (data && Array.isArray(data) ? { name: 'Root', children: data } : null);
         if (!rootData || !rootData.children || rootData.children.length === 0) {
-            container.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:${css.muted};font-family:${css.mono};font-size:0.82rem">No community data — run a sync and graph analysis first</div>`;
+            container.innerHTML = `<div class="state-box">No community data found.<br><small style="color:var(--muted)">Run a <b>Sync</b> then wait for graph analysis to complete.</small></div>`;
             return;
         }
 
@@ -245,7 +245,7 @@
         const links = (data && data.links) ? data.links : [];
 
         if (nodes.length === 0) {
-            container.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:${css.muted};font-family:${css.mono};font-size:0.82rem">No graph data — run a sync with graph analysis</div>`;
+            container.innerHTML = `<div class="state-box">No graph nodes found.<br><small style="color:var(--muted)">Graph data requires a background crawl (Depth 1+).</small></div>`;
             return;
         }
 

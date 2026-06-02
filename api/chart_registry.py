@@ -43,7 +43,7 @@ CHART_REGISTRY = {
         "icon": "▬",
         "description": "Distribution of a single numeric variable across your accounts.",
         "dimensions": {
-            "x":     { "required": True,  "accepts": ["numeric"],                "label": "Variable" },
+            "x":     { "required": True,  "accepts": ["numeric"],                "label": "Variable", "field": "followers_count" },
             "color": { "required": False, "accepts": ["categorical"],            "label": "Color By" },
         },
         "data_shape": "rows",

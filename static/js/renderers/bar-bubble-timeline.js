@@ -36,7 +36,7 @@
         const yDomain = [0, d3.max(data, d => d.y) * 1.05];
         const yScale = ChartBase.buildScale(yCfg.scale || 'linear', yDomain, [height, 0]);
 
-        ChartBase.drawGridLines(g, { ticks: () => yScale.ticks(5) }, yScale, width, height, css);
+        ChartBase.drawGridLines(g, null, yScale, width, height, css);
 
         const xAxisG = g.append('g').attr('transform', `translate(0,${height})`)
             .call(d3.axisBottom(xScale));
@@ -154,13 +154,23 @@
             axisG.select('.domain').attr('stroke', css.border);
             axisG.selectAll('.tick line').attr('stroke', css.muted2);
             axisG.selectAll('.tick text').attr('fill', css.muted).style('font-family', css.mono).style('font-size', '10px');
-            g.append('text')
-                .attr(orient === 'bottom' ? 'x' : 'transform', orient === 'bottom' ? width / 2 : 'rotate(-90)')
-                .attr(orient === 'bottom' ? 'y' : 'x', orient === 'bottom' ? height + 48 : -height / 2)
-                .attr(orient === 'bottom' ? '' : 'y', orient === 'bottom' ? '' : -56)
-                .attr('text-anchor', 'middle').attr('fill', css.muted)
-                .style('font-family', css.sans).style('font-size', '11px').style('font-weight', '600')
-                .text(cfg.label || (orient === 'bottom' ? 'X' : 'Y'));
+
+            if (orient === 'bottom') {
+                g.append('text')
+                    .attr('x', width / 2)
+                    .attr('y', height + 48)
+                    .attr('text-anchor', 'middle').attr('fill', css.muted)
+                    .style('font-family', css.sans).style('font-size', '11px').style('font-weight', '600')
+                    .text(cfg.label || 'X');
+            } else {
+                g.append('text')
+                    .attr('transform', 'rotate(-90)')
+                    .attr('x', -height / 2)
+                    .attr('y', -56)
+                    .attr('text-anchor', 'middle').attr('fill', css.muted)
+                    .style('font-family', css.sans).style('font-size', '11px').style('font-weight', '600')
+                    .text(cfg.label || 'Y');
+            }
         });
 
         const tooltip = new ChartBase.ChartTooltip(container);

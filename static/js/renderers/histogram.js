@@ -12,7 +12,7 @@
 
         container.innerHTML = '';
         if (!data || data.length === 0) {
-            container.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:${css.muted};font-family:${css.mono};font-size:0.82rem">No data</div>`;
+            container.innerHTML = `<div class="state-box">No data for this variable.<br><small style="color:var(--muted)">The selected field may be empty for these accounts.</small></div>`;
             return;
         }
 
@@ -26,7 +26,14 @@
         const g   = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
 
         const xCfg = axes.x || {};
-        const values = data.map(d => d.x).filter(v => v != null && isFinite(v));
+        
+        // Filter out null/undefined/NaN but keep 0
+        const values = data.map(d => d.x).filter(v => v !== null && v !== undefined && isFinite(v));
+
+        if (values.length === 0) {
+            container.innerHTML = `<div class="state-box">No numeric data available for "${xCfg.label || 'X'}" in this selection.</div>`;
+            return;
+        }
 
         const xScale = ChartBase.buildScale(xCfg.scale || 'linear', xCfg.domain || d3.extent(values), [0, width]);
         const binCount = 30;

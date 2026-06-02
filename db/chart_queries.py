@@ -334,7 +334,12 @@ async def _query_aggregated(owner_id: int, chart_def: dict, limit: int) -> dict:
 async def _query_hierarchy(owner_id: int, chart_def: dict, limit: int) -> dict:
     """Circle packing — delegates to get_graph_data(mode=packing)."""
     from db.queries import get_graph_data
-    return await get_graph_data(owner_id=owner_id, mode="packing", limit=limit)
+    result = await get_graph_data(owner_id=owner_id, mode="packing", limit=limit)
+    
+    # If the hierarchy has no children, it's often because community_id is null for all nodes.
+    # We should ensure the result at least reflects the chart type.
+    result["chart_type"] = chart_def.get("chart_type")
+    return result
 
 
 async def _query_graph(owner_id: int, chart_def: dict, limit: int) -> dict:

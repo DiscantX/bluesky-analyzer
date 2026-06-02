@@ -226,28 +226,32 @@ function renderChart(container, apiResponse, options = {}) {
 // ── Grid lines helper ─────────────────────────────────────────────────────────
 function drawGridLines(g, xScale, yScale, width, height, css) {
     // Horizontal grid
-    g.append('g')
-        .attr('class', 'grid-h')
-        .selectAll('line')
-        .data(yScale.ticks(5))
-        .join('line')
-        .attr('x1', 0).attr('x2', width)
-        .attr('y1', d => yScale(d)).attr('y2', d => yScale(d))
-        .attr('stroke', css.border)
-        .attr('stroke-dasharray', '2,4')
-        .attr('opacity', 0.5);
+    if (yScale && typeof yScale.ticks === 'function') {
+        g.append('g')
+            .attr('class', 'grid-h')
+            .selectAll('line')
+            .data(yScale.ticks(5))
+            .join('line')
+            .attr('x1', 0).attr('x2', width)
+            .attr('y1', d => yScale(d)).attr('y2', d => yScale(d))
+            .attr('stroke', css.border)
+            .attr('stroke-dasharray', '2,4')
+            .attr('opacity', 0.5);
+    }
 
     // Vertical grid
-    g.append('g')
-        .attr('class', 'grid-v')
-        .selectAll('line')
-        .data(xScale.ticks(5))
-        .join('line')
-        .attr('x1', d => xScale(d)).attr('x2', d => xScale(d))
-        .attr('y1', 0).attr('y2', height)
-        .attr('stroke', css.border)
-        .attr('stroke-dasharray', '2,4')
-        .attr('opacity', 0.5);
+    if (xScale && typeof xScale.ticks === 'function') {
+        g.append('g')
+            .attr('class', 'grid-v')
+            .selectAll('line')
+            .data(xScale.ticks(5))
+            .join('line')
+            .attr('x1', d => xScale(d)).attr('x2', d => xScale(d))
+            .attr('y1', 0).attr('y2', height)
+            .attr('stroke', css.border)
+            .attr('stroke-dasharray', '2,4')
+            .attr('opacity', 0.5);
+    }
 }
 
 // Expose globally
