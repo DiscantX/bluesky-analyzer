@@ -88,14 +88,13 @@ function renderCard(chart) {
   const icon    = chart.icon || TYPE_ICONS[chart.chart_type] || '📊';
   const typeLabel = TYPE_LABELS[chart.chart_type] || chart.chart_type.replace(/_/g, ' ');
   const updated = fmtCardDate(chart.updated_at || chart.created_at);
-  const is3d    = chart.chart_type === 'force_directed_3d';
 
   return `
     <article class="chart-card" data-id="${chart.id}">
       <div class="chart-card-preview" id="preview-${chart.id}">
         <div class="chart-card-loading">
           <span>${icon}</span>
-          <div>${is3d ? '3D graph — click to view' : 'Loading…'}</div>
+          <div>Loading…</div>
         </div>
       </div>
       <div class="chart-card-body">
@@ -170,12 +169,8 @@ async function loadCharts() {
     });
   });
 
-  // Load thumbnails lazily — skip 3D (no thumbnail renderer)
-  charts.forEach(chart => {
-    if (chart.chart_type !== 'force_directed_3d') {
-      loadThumbnail(chart);
-    }
-  });
+  // Load thumbnails lazily.
+  charts.forEach(chart => loadThumbnail(chart));
 }
 
 async function loadThumbnail(chart) {

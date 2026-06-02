@@ -144,7 +144,7 @@
 
     function renderCirclePackingSVG(container, apiResponse, options = {}) {
         const { data } = apiResponse;
-        const { colorPalette, cssVars: css, onPointClick } = options;
+        const { colorPalette, cssVars: css, onPointClick, labels = true } = options;
 
         container.innerHTML = '';
 
@@ -181,8 +181,10 @@
             if (animated) g.transition().duration(600).ease(d3.easeCubicInOut).attr('transform', transform);
             else g.attr('transform', transform);
             currentFocus = node;
-            label.filter(d => d.depth === 1).style('opacity', node.depth === 0 ? 1 : 0);
-            label.filter(d => d.depth === 2).style('opacity', d => node.depth === 1 && d.parent === node ? 1 : 0);
+            if (labels && label) {
+                label.filter(d => d.depth === 1).style('opacity', node.depth === 0 ? 1 : 0);
+                label.filter(d => d.depth === 2).style('opacity', d => node.depth === 1 && d.parent === node ? 1 : 0);
+            }
         };
 
         const node = g.selectAll('circle')
@@ -204,17 +206,19 @@
                 }
             });
 
-        const label = g.selectAll('text')
-            .data(root.descendants().filter(d => d.depth > 0))
-            .join('text')
-            .attr('x', d => d.x).attr('y', d => d.y)
-            .attr('text-anchor', 'middle')
-            .style('pointer-events', 'none')
-            .style('font-family', css.mono)
-            .style('fill', d => d.depth === 1 ? color(d.data.id) : css.text)
-            .style('font-size', d => d.depth === 1 ? `${Math.max(8, Math.min(14, d.r / 5))}px` : `${Math.max(6, Math.min(10, d.r / 3))}px`)
-            .style('opacity', d => d.depth === 1 ? 1 : 0)
-            .text(d => d.depth === 1 ? (d.data.name || `Comm ${d.data.id}`) : `@${d.data.handle || ''}`);
+        const label = labels
+            ? g.selectAll('text')
+                .data(root.descendants().filter(d => d.depth > 0))
+                .join('text')
+                .attr('x', d => d.x).attr('y', d => d.y)
+                .attr('text-anchor', 'middle')
+                .style('pointer-events', 'none')
+                .style('font-family', css.mono)
+                .style('fill', d => d.depth === 1 ? color(d.data.id) : css.text)
+                .style('font-size', d => d.depth === 1 ? `${Math.max(8, Math.min(14, d.r / 5))}px` : `${Math.max(6, Math.min(10, d.r / 3))}px`)
+                .style('opacity', d => d.depth === 1 ? 1 : 0)
+                .text(d => d.depth === 1 ? (d.data.name || `Comm ${d.data.id}`) : `@${d.data.handle || ''}`)
+            : null;
 
         svg.on('click', () => zoomTo(root));
         zoomTo(root, false);
@@ -249,8 +253,9 @@
             return;
         }
 
-        // Use ForceGraph library if available (loaded on graph.html)
-        if (typeof ForceGraph === 'function') {
+        // Use ForceGraph library for full interactive views. Static previews use
+        // the deterministic SVG fallback so they do not pause on a blank frame.
+        if (interactive !== false && typeof ForceGraph === 'function') {
             const fg = ForceGraph()(container)
                 .graphData({ nodes: nodes.map(n => ({ ...n, id: n.did || n.id })), links })
                 .nodeId('id')
@@ -274,43 +279,61 @@
 
         const colorScale = d3.scaleOrdinal().domain([...new Set(nodes.map(n => n.comm))]).range(colorPalette);
 
-        const sim = d3.forceSimulation(nodes)
-            .force('link', d3.forceLink(links).id(d => d.did || d.id).distance(40))
-            .force('charge', d3.forceManyBody().strength(-80))
-            .force('center', d3.forceCenter(W / 2, H / 2))
-            .force('collide', d3.forceCollide(6));
+        const graphNodes = nodes.map(n => ({ ...n }));
+        const graphLinks = links.map(l => ({ ...l }));
 
-        const link = g.append('g').selectAll('line').data(links).join('line')
+        const sim = d3.forceSimulation(graphNodes)
+            .force('link', d3.forceLink(graphLinks).id(d => d.did || d.id).distance(interactive === false ? 24 : 40))
+            .force('charge', d3.forceManyBody().strength(interactive === false ? -35 : -80))
+            .force('center', d3.forceCenter(W / 2, H / 2))
+            .force('collide', d3.forceCollide(interactive === false ? 3 : 6));
+
+        if (interactive === false) {
+            sim.stop();
+            for (let i = 0; i < 140; i++) sim.tick();
+        }
+
+        const link = g.append('g').selectAll('line').data(graphLinks).join('line')
             .attr('stroke', 'rgba(255,255,255,0.07)').attr('stroke-width', 0.5);
 
-        const nodeG = g.append('g').selectAll('circle').data(nodes).join('circle')
-            .attr('r', n => Math.sqrt(n.rank || 0.001) * 50 + 2)
+        const nodeG = g.append('g').selectAll('circle').data(graphNodes).join('circle')
+            .attr('r', n => interactive === false ? Math.sqrt(n.rank || 0.001) * 26 + 1.5 : Math.sqrt(n.rank || 0.001) * 50 + 2)
             .attr('fill', n => colorScale(n.comm))
             .attr('fill-opacity', 0.8)
             .style('cursor', 'pointer')
-            .call(d3.drag()
+            .attr('cx', d => d.x)
+            .attr('cy', d => d.y);
+
+        if (interactive !== false) {
+            nodeG.call(d3.drag()
                 .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
                 .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
                 .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+        }
 
         if (onPointClick) nodeG.on('click', (e, d) => { if (d.did) onPointClick(d.did, d); });
 
-        const tooltip = new ChartBase.ChartTooltip(container);
-        nodeG.on('mouseover', (e, d) => { tooltip.show(`<div style="color:var(--accent);font-weight:700">@${d.handle}</div><div style="color:var(--muted);font-size:0.68rem">FlowRank: ${ChartBase.fmtVal(d.rank)}</div>`, e); })
-             .on('mousemove', (e) => tooltip.move(e))
-             .on('mouseout', () => tooltip.hide());
+        const tooltip = interactive !== false ? new ChartBase.ChartTooltip(container) : null;
+        if (tooltip) {
+            nodeG.on('mouseover', (e, d) => { tooltip.show(`<div style="color:var(--accent);font-weight:700">@${d.handle}</div><div style="color:var(--muted);font-size:0.68rem">FlowRank: ${ChartBase.fmtVal(d.rank)}</div>`, e); })
+                 .on('mousemove', (e) => tooltip.move(e))
+                 .on('mouseout', () => tooltip.hide());
+        }
 
-        svg.call(d3.zoom().on('zoom', e => g.attr('transform', e.transform)));
+        if (interactive !== false) {
+            svg.call(d3.zoom().on('zoom', e => g.attr('transform', e.transform)));
+        }
 
-        sim.on('tick', () => {
+        const drawFrame = () => {
             link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
                 .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
             nodeG.attr('cx', d => d.x).attr('cy', d => d.y);
-        });
+        };
 
-        if (!interactive) sim.stop();
+        drawFrame();
+        if (interactive !== false) sim.on('tick', drawFrame);
 
-        return { destroy: () => { sim.stop(); tooltip.destroy(); container.innerHTML = ''; } };
+        return { destroy: () => { sim.stop(); if (tooltip) tooltip.destroy(); container.innerHTML = ''; } };
     }
 
     ChartBase.registerRenderer('force_directed', { svg: renderForceDirected, webgl: renderForceDirected });

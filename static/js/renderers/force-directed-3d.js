@@ -44,6 +44,43 @@
         return palette[Math.abs(Math.round(commId)) % palette.length];
     }
 
+    function renderStaticGraphPreview(container, nodes, links, options) {
+        const { colorPalette, cssVars: css } = options;
+        const W = container.clientWidth || 320;
+        const H = container.clientHeight || 200;
+        const graphNodes = nodes.map(n => ({ ...n }));
+        const graphLinks = links.map(l => ({ ...l }));
+
+        const svg = d3.select(container).append('svg').attr('width', W).attr('height', H);
+        const g = svg.append('g');
+        const colorScale = d3.scaleOrdinal().domain([...new Set(graphNodes.map(n => n.comm))]).range(colorPalette);
+
+        const sim = d3.forceSimulation(graphNodes)
+            .force('link', d3.forceLink(graphLinks).id(d => d.did || d.id || d.handle).distance(24))
+            .force('charge', d3.forceManyBody().strength(-35))
+            .force('center', d3.forceCenter(W / 2, H / 2))
+            .force('collide', d3.forceCollide(3))
+            .stop();
+
+        for (let i = 0; i < 140; i++) sim.tick();
+
+        g.selectAll('line').data(graphLinks).join('line')
+            .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x).attr('y2', d => d.target.y)
+            .attr('stroke', 'rgba(255,255,255,0.07)')
+            .attr('stroke-width', 0.5);
+
+        g.selectAll('circle').data(graphNodes).join('circle')
+            .attr('cx', d => d.x).attr('cy', d => d.y)
+            .attr('r', d => Math.sqrt(d.rank || 0.001) * 26 + 1.5)
+            .attr('fill', d => colorScale(d.comm))
+            .attr('fill-opacity', 0.82)
+            .attr('stroke', css.surface)
+            .attr('stroke-width', 0.4);
+
+        return { destroy: () => { sim.stop(); container.innerHTML = ''; } };
+    }
+
     // ── Main renderer ─────────────────────────────────────────────────────────
     async function renderForceDirected3D(container, apiResponse, options = {}) {
         const { data, axes, chart_options = {} } = apiResponse;
@@ -65,6 +102,10 @@
             return null;
         }
 
+        if (interactive === false) {
+            return renderStaticGraphPreview(container, nodes, links, options);
+        }
+
         // Projection mode — "3d" or "2d"
         let projectionMode = chart_options.projection || '3d';
         const showLabels   = chart_options.show_labels !== false;
@@ -82,8 +123,9 @@
             return null;
         }
 
-        const W = container.clientWidth  || 800;
-        const H = container.clientHeight || 600;
+        const rect = container.getBoundingClientRect();
+        const W = Math.max(container.clientWidth || rect.width || 800, 320);
+        const H = Math.max(container.clientHeight || rect.height || 600, 240);
 
         // ── Graph data ────────────────────────────────────────────────────────
         const graphNodes = nodes.map(n => ({
@@ -112,12 +154,12 @@
 
             const wrapper = document.createElement('div');
             wrapper.className = 'fg3d-wrapper';
-            wrapper.style.cssText = 'position:absolute;inset:0;';
+            wrapper.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
             container.appendChild(wrapper);
 
             graph3d = ForceGraph3D({ controlType: mode === '2d' ? 'orbit' : 'orbit' })(wrapper)
-                .width(wrapper.clientWidth || W)
-                .height(wrapper.clientHeight || H)
+                .width(Math.max(wrapper.clientWidth || W, 320))
+                .height(Math.max(wrapper.clientHeight || H, 240))
                 .backgroundColor(css.bg || '#0c0e14')
                 .graphData({ nodes: graphNodes, links: graphLinks })
                 .nodeId('id')
@@ -134,15 +176,16 @@
                     if (onPointClick && n.did) onPointClick(n.did, n);
                 });
 
-            if (showLabels) {
+            const THREE_NS = window.THREE;
+            if (showLabels && THREE_NS) {
                 graph3d.nodeThreeObject(n => {
-                    const group = new THREE.Group();
+                    const group = new THREE_NS.Group();
 
                     // Sphere
                     const r = nodeRadius(n);
-                    const geo  = new THREE.SphereGeometry(r, 12, 12);
-                    const mat  = new THREE.MeshLambertMaterial({ color: commColor(n.comm, colorPalette), transparent: true, opacity: 0.85 });
-                    group.add(new THREE.Mesh(geo, mat));
+                    const geo  = new THREE_NS.SphereGeometry(r, 12, 12);
+                    const mat  = new THREE_NS.MeshLambertMaterial({ color: commColor(n.comm, colorPalette), transparent: true, opacity: 0.85 });
+                    group.add(new THREE_NS.Mesh(geo, mat));
 
                     // Label (only for higher-FlowRank nodes to avoid clutter)
                     if ((n.rank || 0) * 1000 > 0.1) {
@@ -175,6 +218,7 @@
 
         // ── Text sprite helper ────────────────────────────────────────────────
         function makeTextSprite(text, css) {
+            const THREE_NS = window.THREE;
             const canvas = document.createElement('canvas');
             canvas.width  = 256;
             canvas.height = 64;
@@ -187,9 +231,9 @@
             ctx.textBaseline = 'middle';
             ctx.fillText(text, 128, 32);
 
-            const texture = new THREE.CanvasTexture(canvas);
-            const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
-            const sprite = new THREE.Sprite(material);
+            const texture = new THREE_NS.CanvasTexture(canvas);
+            const material = new THREE_NS.SpriteMaterial({ map: texture, transparent: true });
+            const sprite = new THREE_NS.Sprite(material);
             sprite.scale.set(20, 5, 1);
             return sprite;
         }
@@ -269,6 +313,7 @@
 
         // ── Initial render ────────────────────────────────────────────────────
         container.style.position = 'relative';
+        container.style.minHeight = container.style.minHeight || '240px';
         buildGraph(projectionMode);
         injectControls();
 
@@ -277,7 +322,7 @@
             if (!graph3d) return;
             const w = container.clientWidth;
             const h = container.clientHeight;
-            try { graph3d.width(w).height(h); } catch (_) {}
+            try { graph3d.width(Math.max(w, 320)).height(Math.max(h, 240)); } catch (_) {}
         });
         resizeObs.observe(container);
 
