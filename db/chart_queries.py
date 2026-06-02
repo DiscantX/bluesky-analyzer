@@ -334,12 +334,14 @@ async def _query_aggregated(owner_id: int, chart_def: dict, limit: int) -> dict:
 async def _query_hierarchy(owner_id: int, chart_def: dict, limit: int) -> dict:
     """Circle packing — delegates to get_graph_data(mode=packing)."""
     from db.queries import get_graph_data
-    result = await get_graph_data(owner_id=owner_id, mode="packing", limit=limit)
+    hierarchy = await get_graph_data(owner_id=owner_id, mode="packing", limit=limit)
     
-    # If the hierarchy has no children, it's often because community_id is null for all nodes.
-    # We should ensure the result at least reflects the chart type.
-    result["chart_type"] = chart_def.get("chart_type")
-    return result
+    return {
+        "data": hierarchy,
+        "axes": {},
+        "total": len(hierarchy.get("children", [])),
+        "truncated": False,
+    }
 
 
 async def _query_graph(owner_id: int, chart_def: dict, limit: int) -> dict:
@@ -350,7 +352,7 @@ async def _query_graph(owner_id: int, chart_def: dict, limit: int) -> dict:
     filter_tree = chart_def.get("filter_tree")
     filter_set_id = chart_def.get("filter_set_id")
 
-    result = await get_graph_data(owner_id=owner_id, mode="macro", limit=limit)
+    graph = await get_graph_data(owner_id=owner_id, mode="macro", limit=limit)
 
     # If filter is set, post-filter nodes by running the WHERE clause
     if filter_tree or filter_set_id:
@@ -366,16 +368,21 @@ async def _query_graph(owner_id: int, chart_def: dict, limit: int) -> dict:
                 params,
             )
             allowed = {r["did"] for r in filtered_dids_rows}
-            result["nodes"] = [n for n in result.get("nodes", []) if n.get("did") in allowed]
-            filtered_dids_set = {n.get("did") for n in result["nodes"]}
-            result["links"] = [
-                lnk for lnk in result.get("links", [])
+            graph["nodes"] = [n for n in graph.get("nodes", []) if n.get("did") in allowed]
+            filtered_dids_set = {n.get("did") for n in graph["nodes"]}
+            graph["links"] = [
+                lnk for lnk in graph.get("links", [])
                 if lnk.get("source") in filtered_dids_set and lnk.get("target") in filtered_dids_set
             ]
         except Exception as e:
             logger.warning(f"Graph filter failed, returning unfiltered: {e}")
 
-    return result
+    return {
+        "data": graph,
+        "axes": {},
+        "total": len(graph.get("nodes", [])),
+        "truncated": len(graph.get("nodes", [])) >= limit,
+    }
 
 
 async def query_chart_data(owner_id: int, chart_def: dict, thumbnail: bool = False) -> dict:

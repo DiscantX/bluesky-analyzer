@@ -67,6 +67,9 @@ FILTERABLE_FIELDS_MAP = {
     "sampled_post_count": "p.sampled_post_count",
     "repost_count": "p.repost_count",
     "original_post_count": "p.original_post_count",
+    "repost_ratio": "p.repost_ratio",
+    "is_inactive": "p.is_inactive",
+    "is_repost_heavy": "p.is_repost_heavy",
 
     # Numeric fields (from AccountRelationship)
     "flowrank_score": "r.flowrank_score",
