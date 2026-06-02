@@ -22,8 +22,8 @@ from pathlib import Path
 
 import uvicorn
 import config
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from tortoise.contrib.fastapi import RegisterTortoise
@@ -33,8 +33,10 @@ from api.sync import router as sync_router
 from api.users import router as users_router
 from api.filters import router as filters_router
 from api.api_settings import router as settings_router
+from api.chart_registry import CHART_REGISTRY
 from api.graph import router as graph_router
 from api.charts import router as charts_router
+from db.models import ChartDefinition, SavedAccount as _SA
 import analyzer.worker as worker_module
 from analyzer.manager import running_tasks
 
@@ -371,50 +373,95 @@ async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
 @app.get("/graph/{alias}", response_class=HTMLResponse)
-async def graph_view(request: Request, alias: str):
-    """Legacy redirect → Chart Studio force_directed chart."""
-    from fastapi.responses import RedirectResponse as _RR
-    from db.models import ChartDefinition, SavedAccount as _SA
-    owner = await _SA.get_or_none(alias=alias)
-    if owner:
-        chart = await ChartDefinition.filter(
-            owner=owner, chart_type="force_directed"
-        ).order_by("pin_order", "created_at").first()
-        if chart:
-            return _RR(f"/charts/{alias}/{chart.id}/view")
-    return _RR(f"/charts/{alias}")
+async def graph_view(alias: str):
+    """Legacy redirect -> Chart Studio force_directed chart."""
+    return await _redirect_to_chart_type(alias, "force_directed")
 
 @app.get("/hive/{alias}", response_class=HTMLResponse)
-async def hive_view(request: Request, alias: str):
-    """Legacy redirect → Chart Studio hive chart."""
-    from fastapi.responses import RedirectResponse as _RR
-    from db.models import ChartDefinition, SavedAccount as _SA
-    owner = await _SA.get_or_none(alias=alias)
-    if owner:
-        chart = await ChartDefinition.filter(
-            owner=owner, chart_type="hive"
-        ).order_by("created_at").first()
-        if chart:
-            return _RR(f"/charts/{alias}/{chart.id}/view")
-    return _RR(f"/charts/{alias}")
+async def hive_view(alias: str):
+    """Legacy redirect -> Chart Studio hive chart."""
+    return await _redirect_to_chart_type(alias, "hive")
 
 @app.get("/pack/{alias}", response_class=HTMLResponse)
-async def pack_view(request: Request, alias: str):
-    """Legacy redirect → Chart Studio circle_packing chart."""
-    from fastapi.responses import RedirectResponse as _RR
-    from db.models import ChartDefinition, SavedAccount as _SA
+async def pack_view(alias: str):
+    """Legacy redirect -> Chart Studio circle_packing chart."""
+    return await _redirect_to_chart_type(alias, "circle_packing")
+
+async def _redirect_to_chart_type(alias: str, chart_type: str):
+    """Helper to find and redirect to a specific chart type's view page."""
     owner = await _SA.get_or_none(alias=alias)
     if owner:
+        # Prioritize pinned charts, then by creation date
         chart = await ChartDefinition.filter(
-            owner=owner, chart_type="circle_packing"
-        ).order_by("created_at").first()
+            owner=owner, chart_type=chart_type
+        ).order_by("-pinned", "created_at").first()
         if chart:
-            return _RR(f"/charts/{alias}/{chart.id}/view")
-    return _RR(f"/charts/{alias}")
+            return RedirectResponse(f"/charts/{alias}/{chart.id}/view")
+    return RedirectResponse(f"/charts/{alias}")
 
 # ── Chart Studio page routes ──────────────────────────────────────────────────
+async def _seed_default_charts(owner: _SA):
+    """Seeds default charts for a new account if none exist."""
+    if await ChartDefinition.filter(owner=owner).count() > 0:
+        return
+
+    logger.info(f"Seeding default charts for {owner.alias}...")
+
+    default_charts_data = [
+        {
+            "name": "Network Graph", "icon": "🕸", "chart_type": "force_directed",
+            "dimensions": {
+                "node_size": {"source": "field", "field": "flowrank_score", "label": "FlowRank", "scale": "sqrt"},
+                "node_color": {"source": "field", "field": "community_id", "label": "Community", "scale": "linear"}
+            },
+            "filter_tree": {"op": "AND", "conditions": [{"field": "i_follow_them", "op": "eq", "value": True}]},
+            "pinned": True, "pin_order": 1
+        },
+        {
+            "name": "FlowRank vs Followers", "icon": "⚬", "chart_type": "scatter",
+            "dimensions": {
+                "x": {"source": "field", "field": "flowrank_score", "label": "FlowRank", "scale": "log"},
+                "y": {"source": "field", "field": "followers_count", "label": "Followers", "scale": "log"},
+                "color": {"source": "field", "field": "community_id", "label": "Community", "scale": "linear"}
+            },
+            "filter_tree": {"op": "AND", "conditions": [{"field": "i_follow_them", "op": "eq", "value": True}]},
+            "pinned": False
+        },
+        {
+            "name": "Repost Distribution", "icon": "▬", "chart_type": "histogram",
+            "dimensions": {"x": {"source": "field", "field": "repost_ratio", "label": "Repost Ratio", "scale": "linear"}},
+            "filter_tree": {"op": "AND", "conditions": [{"field": "i_follow_them", "op": "eq", "value": True}]},
+            "pinned": False
+        },
+        {
+            "name": "Community Activity", "icon": "▌", "chart_type": "bar",
+            "dimensions": {
+                "x": {"source": "field", "field": "community_id", "label": "Community", "scale": "linear"},
+                "y": {"source": "field", "field": "flowrank_score", "label": "FlowRank", "scale": "linear"}
+            },
+            "aggregation": "avg",
+            "pinned": False
+        },
+        {
+            "name": "Hive Plot", "icon": "🍯", "chart_type": "hive",
+            "dimensions": {
+                "axis_0": {"source": "field", "field": "flowrank_score", "label": "Influence", "scale": "log"},
+                "axis_1": {"source": "field", "field": "posts_count", "label": "Activity", "scale": "log"},
+                "axis_2": {"source": "field", "field": "clustering_coefficient", "label": "Clustering", "scale": "linear"}
+            },
+            "filter_tree": {"op": "AND", "conditions": [{"field": "i_follow_them", "op": "eq", "value": True}]},
+            "pinned": False
+        },
+    ]
+
+    for chart_data in default_charts_data:
+        await ChartDefinition.create(owner=owner, **chart_data)
+
 @app.get("/charts/{alias}", response_class=HTMLResponse)
 async def charts_gallery(request: Request, alias: str):
+    owner = await _SA.get_or_none(alias=alias)
+    if owner:
+        await _seed_default_charts(owner)
     return templates.TemplateResponse(request, "charts.html", {"alias": alias})
 
 @app.get("/charts/{alias}/new", response_class=HTMLResponse)
