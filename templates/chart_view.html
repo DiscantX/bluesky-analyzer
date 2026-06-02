@@ -8,8 +8,12 @@
   <link rel="stylesheet" href="/static/css/charts.css">
   <link rel="stylesheet" href="/static/css/info-panel.css">
   <script src="https://d3js.org/d3.v7.min.js"></script>
+  <!-- Three.js dependency for 3D renderers -->
+  <script src="https://unpkg.com/three"></script>
   <!-- force-graph (2D) for force_directed charts -->
   <script src="https://unpkg.com/force-graph"></script>
+  <!-- 3d-force-graph for force_directed_3d charts -->
+  <script src="https://unpkg.com/3d-force-graph"></script>
 </head>
 <body style="margin:0;overflow:hidden;background:var(--bg)">
 
@@ -118,27 +122,26 @@ const SCRIPTS = [
   '/static/js/info-panel.js',
 ];
 
-SCRIPTS.reduce(
-  (p, src) =>
-    p.then(
-      () =>
-        new Promise((res, rej) => {
-          const s = document.createElement('script');
-          s.src    = src;
-          s.onload = res;
-          s.onerror = rej;
-          document.head.appendChild(s);
-        })
-    ),
-  Promise.resolve()
-)
-.then(loadChart)
-.catch(err => {
-  document.getElementById('chart-container').innerHTML =
-    `<div class="state-box" style="color:var(--danger)">
-       Failed to load renderers: ${err.message}
-     </div>`;
-});
+function loadScripts(srcs) {
+  return srcs.reduce((p, src) =>
+    p.then(() => new Promise((res, rej) => {
+      if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = res;
+      s.onerror = () => rej(new Error(`Failed to load: ${src}`));
+      document.head.appendChild(s);
+    })),
+    Promise.resolve()
+  );
+}
+
+loadScripts(SCRIPTS)
+  .then(loadChart)
+  .catch(err => {
+    document.getElementById('chart-container').innerHTML =
+      `<div class="state-box" style="color:var(--danger)">Failed to load renderers: ${err.message}</div>`;
+  });
 
 window.addEventListener('resize', async () => {
   if (_renderer && typeof _renderer.destroy === 'function') _renderer.destroy();

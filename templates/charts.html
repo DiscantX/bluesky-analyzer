@@ -7,6 +7,13 @@
   <link rel="stylesheet" href="/static/css/app.css">
   <link rel="stylesheet" href="/static/css/charts.css">
   <script src="https://d3js.org/d3.v7.min.js"></script>
+  <!-- Three.js dependency for 3D renderers -->
+  <script src="https://unpkg.com/three"></script>
+  <!-- force-graph (2D) for force_directed charts -->
+  <script src="https://unpkg.com/force-graph"></script>
+  <!-- 3d-force-graph for force_directed_3d charts -->
+  <script src="https://unpkg.com/3d-force-graph"></script>
+  <link rel="stylesheet" href="/static/css/info-panel.css">
 </head>
 <body>
 
@@ -46,7 +53,7 @@ async function api(path, opts = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-function fmtDate(iso) {
+function fmtCardDate(iso) {
   if (!iso) return '';
   return new Date(iso).toLocaleDateString(undefined, {
     month: 'short', day: 'numeric', year: '2-digit',
@@ -80,7 +87,7 @@ const TYPE_LABELS = {
 function renderCard(chart) {
   const icon    = chart.icon || TYPE_ICONS[chart.chart_type] || '📊';
   const typeLabel = TYPE_LABELS[chart.chart_type] || chart.chart_type.replace(/_/g, ' ');
-  const updated = fmtDate(chart.updated_at || chart.created_at);
+  const updated = fmtCardDate(chart.updated_at || chart.created_at);
   const is3d    = chart.chart_type === 'force_directed_3d';
 
   return `
@@ -197,29 +204,39 @@ async function loadThumbnail(chart) {
 }
 
 /* Sequential renderer loading */
-const RENDERERS = [
+const RENDERER_FILES = [
   '/static/js/renderers/base.js',
   '/static/js/renderers/scatter.js',
   '/static/js/renderers/histogram.js',
   '/static/js/renderers/bar-bubble-timeline.js',
   '/static/js/renderers/hive-pack-force.js',
-  // 3D renderer not needed for gallery thumbnails; loaded lazily in view page
+  '/static/js/renderers/force-directed-3d.js',
+  '/static/js/community-view.js',
+  '/static/js/profile-view.js',
+  '/static/js/info-panel.js',
 ];
 
-RENDERERS.reduce(
-  (p, src) =>
-    p.then(
-      () =>
-        new Promise((res, rej) => {
-          const s = document.createElement('script');
-          s.src    = src;
-          s.onload = res;
-          s.onerror = rej;
-          document.head.appendChild(s);
-        })
-    ),
-  Promise.resolve()
-).then(loadCharts);
+function loadScripts(srcs) {
+  return srcs.reduce((p, src) =>
+    p.then(() => new Promise((res, rej) => {
+      if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = res;
+      s.onerror = () => rej(new Error(`Failed to load: ${src}`));
+      document.head.appendChild(s);
+    })),
+    Promise.resolve()
+  );
+}
+
+loadScripts(RENDERER_FILES)
+  .then(loadCharts)
+  .catch(err => {
+    console.error("Renderer loading failed:", err);
+    document.getElementById('chart-grid').innerHTML = 
+      `<div class="state-box" style="color:var(--danger)">Failed to load chart engine: ${err.message}</div>`;
+  });
 </script>
 </body>
 </html>
