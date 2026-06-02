@@ -24,7 +24,7 @@ from db.models import AccountRelationship, SavedAccount, SyncRun, FollowEdge, Pr
 from settings_cache import settings_cache
 from db.profile_store import upsert_profile_relationship
 from analyzer.manager import bus, current_alias_var, current_op_var
-from analyzer.metrics import run_graph_analysis
+from analyzer.metrics import run_analysis_entrypoint, analysis_executor
 
 logger = logging.getLogger(__name__)
 
@@ -385,9 +385,11 @@ async def run_sync(
         # ── 5. Run Graph Analysis ──────────────────────────────────────────────
         await emit("phase", message="Computing network metrics (FlowRank/Communities)…")
         try:
-            async def on_graph_prog(msg, pct=None):
-                await emit("progress", message=f"Graph: {msg}", pct=pct)
-            await run_graph_analysis(saved_account, on_progress=on_graph_prog)
+            # Offload to a separate process to prevent stalling the FastAPI event loop.
+            # Note: Progress updates from within the subprocess will not be visible in the UI
+            # during the metrics calculation phase until an inter-process bus is added.
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(analysis_executor, run_analysis_entrypoint, saved_account.id)
         except Exception as e:
             logger.exception(f"Graph analysis failed after sync for {saved_account.handle}: {e}")
             await emit("phase", message="Sync complete; graph metrics will retry later.")

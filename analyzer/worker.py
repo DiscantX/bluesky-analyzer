@@ -129,6 +129,7 @@ async def worker_loop():
             startup_sync_disabled = False
             continue
 
+        logger.info(f"--- Worker Sweep Started (Turbo: {is_turbo_active()}) ---")
         try:
             accounts = await SavedAccount.all()
             now = datetime.now(timezone.utc)

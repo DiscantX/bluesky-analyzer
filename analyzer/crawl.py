@@ -21,7 +21,7 @@ from tortoise.expressions import Q
 from db.models import AccountRelationship, FollowEdge, Profile, SavedAccount, CrawlRun, CrawlQueueItem
 from analyzer.fetch import public_fetch_graph, public_fetch_profiles, BskyClient
 from analyzer.analyze import parse_dt
-from analyzer.metrics import run_graph_analysis
+from analyzer.metrics import run_analysis_entrypoint, analysis_executor
 import config
 from settings_cache import settings_cache
 
@@ -263,6 +263,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     3. Save new edges and create stubs.
     4. Update priorities for affected accounts.
     """
+    logger.info(f"Starting crawl_step for {owner.alias}. Current DB Size: {_get_db_size_mb():.2f} MB")
     await CrawlRun.filter(account=owner, status="running", finished_at__isnull=True).update(
         status="paused",
         last_message="Interrupted while server was offline.",
@@ -363,6 +364,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
         crawl_run.batch_size = effective_batch_size
         await crawl_run.save(update_fields=["batch_size"])
 
+    logger.info(f"Claiming {effective_batch_size} candidates for expansion...")
     candidates = await claim_crawl_items(owner, effective_batch_size)
 
     if not candidates:
@@ -396,6 +398,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     async def process_candidate(item: CrawlQueueItem, public_client: httpx.AsyncClient, auth_client_shared: Optional[BskyClient] = None):
         async with crawl_semaphore:
             user = await AccountRelationship.filter(owner=owner, did=item.did).prefetch_related("profile").first()
+            user_profile = await user.profile if user else None
             if not user:
                 item.status = "skipped"
                 item.completed_at = datetime.now(timezone.utc)
@@ -409,8 +412,7 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
             # Enforcement of connection threshold for stubs
             if user.crawl_tier == 0 and user.in_subgraph_degree < settings_cache.get("min_connection_threshold", 3):
                 if not (user.i_follow_them or user.they_follow_me):
-                    skipped_profile = await user.profile
-                    logger.debug(f"Skipping @{skipped_profile.handle} expansion (degree {user.in_subgraph_degree} < threshold)")
+                    logger.info(f"Skipping expansion for @{user_profile.handle}: degree {user.in_subgraph_degree} < {settings_cache.get('min_connection_threshold', 3)}")
                     item.status = "skipped"
                     item.completed_at = datetime.now(timezone.utc)
                     item.last_error = f"Degree {user.in_subgraph_degree} is below threshold."
@@ -420,9 +422,8 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
                     await crawl_run.save(update_fields=["candidates_skipped"])
                     return
 
-            user_profile = await user.profile
             msg = f"Expanding network from @{user_profile.handle}..."
-            logger.info(f"{msg} (priority: {user.crawl_priority:.2f})")
+            logger.info(f"[Crawl] {msg} (priority: {user.crawl_priority:.2f}, degree: {user.in_subgraph_degree})")
             await emit(msg)
 
             # Collected page_dids across both directions for batched degree update
@@ -573,11 +574,12 @@ async def crawl_step(owner: SavedAccount, batch_size: int = 10, on_progress=None
     # Trigger graph analysis to refresh FlowRank/Communities after expansion
     logger.info(f"Batch crawl finished for {owner.alias}. Refreshing graph metrics.")
     await emit("Computing network metrics...")
+    
     try:
-        async def on_graph_prog(msg, pct=None):
-            # In crawl, emit helper is (message, pct, req_inc)
-            await emit(f"Graph: {msg}", pct=pct)
-        await run_graph_analysis(owner, on_progress=on_graph_prog)
+        # Offload to a separate process to prevent stalling the FastAPI event loop.
+        # Note: Progress updates from within the subprocess will not be visible in the UI.
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(analysis_executor, run_analysis_entrypoint, owner.id)
     except Exception as e:
         logger.exception(f"Graph analysis failed after crawl for {owner.alias}: {e}")
         await emit("Crawl complete; graph metrics will retry later.")

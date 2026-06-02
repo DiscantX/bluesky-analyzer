@@ -7,6 +7,7 @@ import logging
 import asyncio
 import json
 import math
+from concurrent.futures import ProcessPoolExecutor
 from collections import Counter
 import networkx as nx
 from datetime import datetime, timezone, timedelta
@@ -23,10 +24,52 @@ from settings_cache import settings_cache
 logger = logging.getLogger(__name__)
 SQLITE_IN_CHUNK = 32766  # SQLite parameter limit (SQLITE_MAX_VARIABLE_NUMBER) is 32,766
 
+# Global executor for CPU-heavy analysis. 
+# max_workers=1 ensures we don't spawn multiple heavy processes at once.
+analysis_executor = ProcessPoolExecutor(
+    max_workers=1,
+)
+
 
 def _chunks(values: list[str], size: int = SQLITE_IN_CHUNK):
     for i in range(0, len(values), size):
         yield values[i:i + size]
+
+def run_analysis_entrypoint(owner_id: int):
+    """
+    Synchronous entry point for ProcessPoolExecutor.
+    Initializes its own database connection and runs the analysis.
+    """
+    import asyncio
+    import logging
+    from tortoise import Tortoise
+    import config
+    from db.models import SavedAccount
+    from settings_cache import settings_cache
+    from analyzer.metrics import run_graph_analysis as _analyze
+
+    # Re-initialize logging for the spawned process on Windows
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s", datefmt="%H:%M:%S")
+    logger = logging.getLogger("analyzer.metrics.subprocess")
+    
+    logger.info(f"Subprocess spawned: starting analysis for owner_id={owner_id}")
+
+    async def _isolated_task():
+        # Re-init Tortoise for the new process space
+        await Tortoise.init(config={
+            "connections": {"default": f"sqlite://{config.DB_PATH}"},
+            "apps": {"models": {"models": ["db.models"], "default_connection": "default"}}
+        })
+        try:
+            logger.info("Database connected in subprocess. Refreshing settings...")
+            await settings_cache.refresh()
+            owner = await SavedAccount.get(id=owner_id)
+            await _analyze(owner)
+        finally:
+            await Tortoise.close_connections()
+            logger.info("Subprocess analysis complete. Connections closed.")
+
+    asyncio.run(_isolated_task())
 
 async def run_graph_analysis(owner: SavedAccount, on_progress=None):
     """
@@ -71,12 +114,15 @@ async def run_graph_analysis(owner: SavedAccount, on_progress=None):
 
     if on_progress:
         await on_progress(f"Computing FlowRank ({G.number_of_nodes()} nodes)...", 20)
+    logger.info(f"Computing FlowRank for {G.number_of_nodes()} nodes...")
     pr = await loop.run_in_executor(None, _compute_pagerank, G)
 
     if on_progress:
         await on_progress(f"Detecting communities ({G.number_of_nodes()} nodes)...", 30)
+    logger.info("Converting graph to undirected for community detection...")
     undirected = await loop.run_in_executor(None, G.to_undirected)
     res = settings_cache.get("louvain_resolution", 1.0)
+    logger.info(f"Detecting communities (Resolution: {res})...")
     communities = await loop.run_in_executor(None, _compute_communities, undirected, res, G.number_of_nodes())
     
     community_map = {}
@@ -84,8 +130,8 @@ async def run_graph_analysis(owner: SavedAccount, on_progress=None):
         for did in community_nodes:
             community_map[did] = i
 
+    top_n = settings_cache.get("clustering_top_n", 1000)
     if on_progress:
-        top_n = settings_cache.get("clustering_top_n", 1000)
         await on_progress(f"Computing clustering (top {top_n})...", 40)
     clustering = await loop.run_in_executor(None, _compute_clustering, undirected, pr, top_n)
 
@@ -285,10 +331,8 @@ async def _ensure_community_keywords(owner: SavedAccount, on_progress=None):
     """
     top_members = await conn.execute_query_dict(community_members_query, [owner.id])
 
-    dids_to_reanalyze = []
-    profiles_to_reanalyze = {} # Store profile objects to pass to build_tracked_user_data
-    did_to_community = {} # Map DIDs to community IDs for accurate logging
-
+    # Identify DIDs needing re-analysis (stale or missing keywords)
+    stale_dids = []  
 
     # Determine which profiles need re-analysis
     now = datetime.now(timezone.utc)
@@ -301,7 +345,6 @@ async def _ensure_community_keywords(owner: SavedAccount, on_progress=None):
         profile_id = member["profile_id"]
         last_analyzed_at = member["last_analyzed_at"]
         top_keywords = member["top_keywords"]
-        did_to_community[did] = member["community_id"]
 
         needs_reanalysis = False
         if not top_keywords: # Keywords are missing
@@ -315,61 +358,72 @@ async def _ensure_community_keywords(owner: SavedAccount, on_progress=None):
             needs_reanalysis = True # If no analysis date, assume stale
 
         if needs_reanalysis:
-            dids_to_reanalyze.append(did)
-            profiles_to_reanalyze[did] = await Profile.get(id=profile_id)
+            stale_dids.append(did)
 
-    if not dids_to_reanalyze:
+    if not stale_dids:
         logger.info("No key community members require keyword re-analysis.")
         return
 
-    logger.info(f"Re-analyzing feeds for {len(dids_to_reanalyze)} key community members...")
+    logger.info(f"Re-analyzing feeds for {len(stale_dids)} key community members...")
 
-    total_reanalyze = len(dids_to_reanalyze)
+    total_reanalyze = len(stale_dids)
     completed = 0
-    updated_profiles = []
     client = await get_client(owner)
 
-    owner_follows_list = await fetch_all_follows(client, owner.handle)
-    owner_follows = {p.did for p in owner_follows_list}
-    owner_followers_list = await fetch_all_followers(client, owner.handle)
-    owner_followers = {p.did for p in owner_followers_list}
+    # Throttling concurrency for this large batch re-analysis
+    concurrency = settings_cache.get("feed_fetch_concurrency", 15)
+    sem = asyncio.Semaphore(concurrency)
 
-    async for did, feed_items in fetch_feeds_concurrent(
-        client,
-        dids_to_reanalyze,
-        limit_per_actor=settings_cache.get("feed_sample_size", 100),
-    ):
-        completed += 1
-        profile_obj = profiles_to_reanalyze.get(did)
-        if not profile_obj:
-            logger.warning(f"Profile object not found for DID {did} during keyword re-analysis.")
-            continue
-
-        data = build_tracked_user_data(
-            profile=profile_obj,
-            feed_items=feed_items,
-            owner_did=owner.did,
-            i_follow_them=did in owner_follows,
-            they_follow_me=did in owner_followers,
-            inactive_days=settings_cache.get("inactivity_threshold_days", 90),
-            repost_threshold=settings_cache.get("repost_ratio_threshold", 0.7),
-        )
-        data["last_analyzed_at"] = now
-
-        profile_obj.top_keywords = data["top_keywords"]
-        profile_obj.last_analyzed_at = data["last_analyzed_at"]
-        updated_profiles.append(profile_obj)
+    # Process in chunks of 50 to limit the number of active tasks and ORM objects
+    # which prevents memory spikes and disk thrashing from swapping.
+    CHUNK_SIZE = 50
+    for i in range(0, total_reanalyze, CHUNK_SIZE):
+        batch_dids = stale_dids[i : i + CHUNK_SIZE]
         
-        if on_progress and completed % 5 == 0:
-            pct = 70 + int((completed / total_reanalyze) * 20) # 70% to 90%
-            await on_progress(f"Community keywords: {completed}/{total_reanalyze}...", pct)
+        # Fetch Profile and Relationship data only for this batch
+        profiles = await Profile.filter(did__in=batch_dids).all()
+        profile_map = {p.did: p for p in profiles}
+        rels = await AccountRelationship.filter(owner=owner, did__in=batch_dids).all()
+        rel_map = {r.did: r for r in rels}
+        
+        batch_updates = []
+        async for did, feed_items in fetch_feeds_concurrent(
+            client,
+            batch_dids,
+            limit_per_actor=settings_cache.get("feed_sample_size", 100),
+            semaphore=sem,
+        ):
+            completed += 1
+            profile_obj = profile_map.get(did)
+            rel_obj = rel_map.get(did)
+            if not profile_obj or not rel_obj:
+                continue
 
-    if updated_profiles:
-        # Perform a single bulk update to save all analyzed profiles at once,
-        # dramatically reducing the number of SQLite transactions.
-        await Profile.bulk_update(updated_profiles, fields=["top_keywords", "last_analyzed_at"])
-        for p in updated_profiles:
-            logger.debug(f"Updated keywords for {p.handle} (Community {did_to_community.get(p.did, 'N/A')})")
+            # build_tracked_user_data handles keyword extraction and bio weighting
+            data = build_tracked_user_data(
+                profile=profile_obj,
+                feed_items=feed_items,
+                owner_did=owner.did,
+                i_follow_them=rel_obj.i_follow_them,
+                they_follow_me=rel_obj.they_follow_me,
+                inactive_days=settings_cache.get("inactivity_threshold_days", 90),
+                repost_threshold=settings_cache.get("repost_ratio_threshold", 0.7),
+            )
+            
+            profile_obj.top_keywords = data["top_keywords"]
+            profile_obj.last_analyzed_at = now
+            batch_updates.append(profile_obj)
+
+            if on_progress and completed % 5 == 0:
+                pct = 70 + int((completed / total_reanalyze) * 20)
+                await on_progress(f"Community keywords: {completed}/{total_reanalyze}...", pct)
+
+        if batch_updates:
+            # Persist this chunk immediately to clear objects from memory
+            await Profile.bulk_update(batch_updates, fields=["top_keywords", "last_analyzed_at"])
+        
+        if completed % 100 == 0 or i + CHUNK_SIZE >= total_reanalyze:
+            logger.info(f"Community keywords progress: {completed}/{total_reanalyze} profiles analyzed.")
 
     logger.info(f"Finished keyword re-analysis for key community members for {owner.handle}.")
 
