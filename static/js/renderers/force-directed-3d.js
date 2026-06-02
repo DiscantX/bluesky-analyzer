@@ -55,7 +55,11 @@
         const W = container.clientWidth || 320;
         const H = container.clientHeight || 200;
         const graphNodes = nodes.map(n => ({ ...n }));
-        const graphLinks = links.map(l => ({ ...l }));
+        const nodeIds = new Set(graphNodes.map(n => n.did || n.id || n.handle));
+        const graphLinks = links
+            .filter(l => nodeIds.has(l.source) && nodeIds.has(l.target))
+            .slice(0, 2500)
+            .map(l => ({ ...l }));
 
         const svg = d3.select(container).append('svg').attr('width', W).attr('height', H);
         const g = svg.append('g');
@@ -68,7 +72,8 @@
             .force('collide', d3.forceCollide(3))
             .stop();
 
-        for (let i = 0; i < 140; i++) sim.tick();
+        const tickCount = graphNodes.length > 250 ? 80 : 140;
+        for (let i = 0; i < tickCount; i++) sim.tick();
 
         g.selectAll('line').data(graphLinks).join('line')
             .attr('x1', d => d.source.x).attr('y1', d => d.source.y)

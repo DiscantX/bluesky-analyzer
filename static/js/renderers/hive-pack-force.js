@@ -7,7 +7,7 @@
     'use strict';
 
     function renderHiveSVG(container, apiResponse, options = {}) {
-        const { data, axes } = apiResponse;
+        const { data, axes, links = [] } = apiResponse;
         const { colorPalette, cssVars: css, onPointClick } = options;
 
         container.innerHTML = '';
@@ -101,6 +101,33 @@
 
         // Draw cross-axis links
         const nodeMap = new Map(nodes.map(n => [n.did || n.handle, n]));
+        const validLinks = links.filter(l => {
+            const source = nodeMap.get(l.source);
+            const target = nodeMap.get(l.target);
+            return source && target && source._axis !== target._axis;
+        });
+
+        const linkG = g.append('g').attr('class', 'hive-links');
+        const linkPaths = linkG.selectAll('.hive-link')
+            .data(validLinks)
+            .join('path')
+            .attr('class', 'hive-link')
+            .attr('d', d => {
+                const source = nodeMap.get(d.source);
+                const target = nodeMap.get(d.target);
+                const start = getCoords(source);
+                const end = getCoords(target);
+                return `M${start[0]},${start[1]} Q0,0 ${end[0]},${end[1]}`;
+            })
+            .attr('fill', 'none')
+            .attr('stroke', d => {
+                const source = nodeMap.get(d.source);
+                return source ? linkColorFn(source) : css.border;
+            })
+            .attr('stroke-opacity', 0.18)
+            .attr('stroke-width', 0.7)
+            .style('pointer-events', 'none');
+
         const tooltip = new ChartBase.ChartTooltip(container);
 
         // Draw nodes
@@ -116,6 +143,9 @@
         circles
             .on('mouseover', function (event, d) {
                 d3.select(this).attr('r', 6).attr('fill-opacity', 1).attr('stroke', css.accent).attr('stroke-width', 1.5);
+                linkPaths
+                    .attr('stroke-opacity', l => (l.source === d.did || l.target === d.did) ? 0.75 : 0.04)
+                    .attr('stroke-width', l => (l.source === d.did || l.target === d.did) ? 1.4 : 0.6);
                 const axisLabels = {};
                 axisKeys.forEach(k => { if (axes[k]) axisLabels[k] = axes[k]; });
                 tooltip.show(ChartBase.buildTooltipHtml(d, axisLabels), event);
@@ -123,6 +153,7 @@
             .on('mousemove', (e) => tooltip.move(e))
             .on('mouseout', function () {
                 d3.select(this).attr('r', 3.5).attr('fill-opacity', 0.8).attr('stroke', 'none').attr('stroke-width', 0);
+                linkPaths.attr('stroke-opacity', 0.18).attr('stroke-width', 0.7);
                 tooltip.hide();
             })
             .on('click', (event, d) => { if (onPointClick && d.did) onPointClick(d.did, d); });

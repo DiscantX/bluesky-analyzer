@@ -215,6 +215,7 @@ let chartDef = {
 let _previewTimer   = null;
 let _currentRenderer = null;
 let _dirty          = false;
+let _previewSeq     = 0;
 
 // Panel-local builder state (separate from the dashboard filter builder)
 let _panelTree = { id: 'panel-root', op: 'AND', conditions: [] };
@@ -662,6 +663,15 @@ function fieldOptionsHtml(accepts, selected) {
   return parts.join('');
 }
 
+function getFieldLabel(field) {
+  const regLabel = registry.field_labels && registry.field_labels[field];
+  if (regLabel) return regLabel;
+
+  const all = [...NUMERIC_FIELDS, ...CATEGORICAL_FIELDS, ...DATETIME_FIELDS];
+  const found = all.find(([v]) => v === field);
+  return found ? found[1] : '';
+}
+
 function renderDimensions() {
   const section  = document.getElementById('dimensions-section');
   const typeDef  = registry.types && registry.types[chartDef.chart_type];
@@ -759,14 +769,14 @@ function updateDim(dimKey, prop, value) {
   chartDef.dimensions[dimKey][prop] = value;
 
   if (prop === 'field') {
-    // Auto-label
-    const all = [...NUMERIC_FIELDS, ...CATEGORICAL_FIELDS, ...DATETIME_FIELDS];
-    const found = all.find(([v]) => v === value);
-    if (found && !chartDef.dimensions[dimKey].label) {
-      chartDef.dimensions[dimKey].label = found[1];
-      const el = document.querySelector(`.dim-label-input[data-dim="${dimKey}"]`);
-      if (el) el.value = found[1];
+    // Keep preview/editor labels in sync with the selected field.
+    const label = getFieldLabel(value);
+    if (label) {
+      chartDef.dimensions[dimKey].label = label;
+      const labelEl = document.querySelector(`.dim-label-input[data-dim="${dimKey}"]`);
+      if (labelEl) labelEl.value = label;
     }
+
     // Auto-scale
     const isDate = DATETIME_FIELDS.some(([v]) => v === value);
     const isLog  = ['flowrank_score','followers_count','follows_count','posts_count','clustering_coefficient'].includes(value);
@@ -795,6 +805,7 @@ function schedulePreview() {
 }
 
 async function refreshPreview() {
+  const seq = ++_previewSeq;
   const container = document.getElementById('preview-container');
   const meta      = document.getElementById('preview-meta');
   meta.textContent = 'Loading…';
@@ -806,17 +817,21 @@ async function refreshPreview() {
   container.innerHTML = '<div class="state-box">Loading preview…</div>';
 
   // Build payload
-  const payload = buildPayload();
+  const payload = buildPreviewPayload();
 
   try {
     const result = await api(`/api/charts/${encodeURIComponent(ALIAS)}/preview`, {
       method: 'POST',
       body:   JSON.stringify(payload),
     });
+    if (seq !== _previewSeq) return;
+
+    const static3dPreview = result.chart_type === 'force_directed_3d';
     container.innerHTML = '';
     _currentRenderer = ChartBase.renderChart(container, result, {
-      interactive:  true,
-      animated:     true,
+      interactive:  !static3dPreview,
+      animated:     !static3dPreview,
+      labels:       !static3dPreview,
       cssVars:      ChartBase.getCSSVars(),
       colorPalette: ChartBase.PALETTE,
       onPointClick: (did) => { if (typeof InfoPanel !== 'undefined') InfoPanel.open('profile', did); },
@@ -830,6 +845,16 @@ async function refreshPreview() {
     container.innerHTML = `<div class="state-box" style="color:var(--danger)">${e.message}</div>`;
     meta.textContent = 'Error';
   }
+}
+
+function buildPreviewPayload() {
+  const payload = buildPayload();
+  if (payload.chart_type === 'force_directed_3d') {
+    payload.limit = Math.min(parseInt(payload.limit, 10) || 300, 300);
+    const opts = payload.options ? JSON.parse(payload.options) : {};
+    payload.options = JSON.stringify({ ...opts, show_labels: false });
+  }
+  return payload;
 }
 
 // ── Save ───────────────────────────────────────────────────────────────────

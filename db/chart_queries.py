@@ -241,12 +241,28 @@ async def _query_rows(owner_id: int, chart_def: dict, limit: int) -> dict:
             ],
         }
 
-    return {
+    result = {
         "data":      data,
         "axes":      axes,
         "total":     total,
         "truncated": total > limit,
     }
+
+    if chart_def.get("chart_type") == "hive":
+        node_dids = [point["did"] for point in data if point.get("did")]
+        if node_dids:
+            placeholders = ",".join(["?"] * len(node_dids))
+            links_query = f"""
+                SELECT follower_did as source, followee_did as target
+                FROM follow_edges
+                WHERE follower_did IN ({placeholders})
+                  AND followee_did IN ({placeholders})
+            """
+            result["links"] = await conn.execute_query_dict(links_query, node_dids + node_dids)
+        else:
+            result["links"] = []
+
+    return result
 
 
 async def _query_aggregated(owner_id: int, chart_def: dict, limit: int) -> dict:
