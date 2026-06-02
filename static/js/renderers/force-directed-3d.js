@@ -44,6 +44,12 @@
         return palette[Math.abs(Math.round(commId)) % palette.length];
     }
 
+    function ensurePositioned(container) {
+        if (getComputedStyle(container).position === 'static') {
+            container.style.position = 'relative';
+        }
+    }
+
     function renderStaticGraphPreview(container, nodes, links, options) {
         const { colorPalette, cssVars: css } = options;
         const W = container.clientWidth || 320;
@@ -298,7 +304,7 @@
                 </div>
             `;
 
-            container.style.position = 'relative';
+            ensurePositioned(container);
             container.appendChild(ctrl);
 
             // Wire radio buttons
@@ -312,8 +318,10 @@
         }
 
         // ── Initial render ────────────────────────────────────────────────────
-        container.style.position = 'relative';
-        container.style.minHeight = container.style.minHeight || '240px';
+        ensurePositioned(container);
+        if (!container.clientHeight) {
+            container.style.minHeight = container.style.minHeight || '240px';
+        }
         buildGraph(projectionMode);
         injectControls();
 
